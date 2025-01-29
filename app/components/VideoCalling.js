@@ -16,7 +16,8 @@ import {
   getDocs, 
   query, 
   where,
-  getFirestore 
+  getFirestore,
+  arrayUnion
 } from "firebase/firestore"
 import { saveMeetingHistory } from "../lib/firestore"
 
@@ -106,15 +107,24 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
             isHost: meetingData.hostId === userId
           }]);
 
+          // Create a document for this participant in the rtc collection
+          const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`)
+          await addDoc(rtcRef, {
+            userId: userId,
+            displayName: 'You',
+            joinedAt: new Date().toISOString(),
+            isMuted: false,
+            videoOn: true,
+            isHost: meetingData.hostId === userId
+          })
+
           // Set up signaling
-          const participantsRef = collection(db, `meetings/${meetingDocId}/rtc`)
-          
-          // Listen for new participants
-          const unsubscribe = onSnapshot(participantsRef, (snapshot) => {
+          const unsubscribe = onSnapshot(rtcRef, (snapshot) => {
             snapshot.docChanges().forEach(async change => {
               const data = change.doc.data()
               
               if (change.type === 'added' && data.userId !== userId) {
+                console.log('New participant joined:', data.userId)
                 // Create new peer connection
                 const pc = new RTCPeerConnection(ICE_SERVERS)
                 peerConnections.current[data.userId] = pc
@@ -127,16 +137,16 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                 // Handle ICE candidates
                 pc.onicecandidate = async (event) => {
                   if (event.candidate) {
-                    await updateDoc(doc(participantsRef, data.userId), {
-                      candidates: [...(data.candidates || []), event.candidate]
+                    await updateDoc(change.doc.ref, {
+                      [`candidates.${userId}`]: arrayUnion(event.candidate)
                     })
                   }
                 }
 
                 // Handle incoming tracks
                 pc.ontrack = (event) => {
+                  console.log('Received remote track from:', data.userId)
                   setParticipants(prev => {
-                    // Check if participant already exists
                     const exists = prev.find(p => p.userId === data.userId)
                     if (exists) return prev
                     
@@ -152,12 +162,14 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                   })
                 }
 
-                // If we're the host or the new participant is the host, create and send offer
-                if (isHost || data.userId === meetingData.hostId) {
+                // Create offer if we're the newer participant
+                const shouldCreateOffer = userId > data.userId
+                if (shouldCreateOffer) {
+                  console.log('Creating offer for:', data.userId)
                   const offer = await pc.createOffer()
                   await pc.setLocalDescription(offer)
-                  await updateDoc(doc(participantsRef, data.userId), {
-                    offer: {
+                  await updateDoc(change.doc.ref, {
+                    [`offers.${userId}`]: {
                       type: offer.type,
                       sdp: offer.sdp
                     }
@@ -165,52 +177,63 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                 }
               }
 
+              // Handle incoming offers
+              if (data.offers?.[data.userId] && !data.answers?.[userId]) {
+                console.log('Received offer from:', data.userId)
+                const pc = peerConnections.current[data.userId]
+                if (pc) {
+                  await pc.setRemoteDescription(new RTCSessionDescription(data.offers[data.userId]))
+                  const answer = await pc.createAnswer()
+                  await pc.setLocalDescription(answer)
+                  await updateDoc(change.doc.ref, {
+                    [`answers.${userId}`]: {
+                      type: answer.type,
+                      sdp: answer.sdp
+                    }
+                  })
+                }
+              }
+
+              // Handle incoming answers
+              if (data.answers?.[data.userId]) {
+                console.log('Received answer from:', data.userId)
+                const pc = peerConnections.current[data.userId]
+                if (pc && !pc.currentRemoteDescription) {
+                  await pc.setRemoteDescription(new RTCSessionDescription(data.answers[data.userId]))
+                }
+              }
+
+              // Handle ICE candidates
+              if (data.candidates?.[data.userId]) {
+                console.log('Received ICE candidates from:', data.userId)
+                const pc = peerConnections.current[data.userId]
+                if (pc) {
+                  data.candidates[data.userId].forEach(candidate => {
+                    pc.addIceCandidate(new RTCIceCandidate(candidate))
+                  })
+                }
+              }
+
               if (change.type === 'removed') {
-                // Remove participant
+                console.log('Participant left:', data.userId)
                 setParticipants(prev => prev.filter(p => p.userId !== data.userId))
                 if (peerConnections.current[data.userId]) {
                   peerConnections.current[data.userId].close()
                   delete peerConnections.current[data.userId]
                 }
               }
-
-              // Handle incoming offers
-              if (data.offer && !data.answer && data.userId !== userId) {
-                const pc = peerConnections.current[data.userId]
-                await pc.setRemoteDescription(new RTCSessionDescription(data.offer))
-                const answer = await pc.createAnswer()
-                await pc.setLocalDescription(answer)
-                await updateDoc(doc(participantsRef, data.userId), {
-                  answer: {
-                    type: answer.type,
-                    sdp: answer.sdp
-                  }
-                })
-              }
-
-              // Handle incoming answers
-              if (data.answer && data.userId !== userId) {
-                const pc = peerConnections.current[data.userId]
-                await pc.setRemoteDescription(new RTCSessionDescription(data.answer))
-              }
-
-              // Handle ICE candidates
-              if (data.candidates && data.userId !== userId) {
-                const pc = peerConnections.current[data.userId]
-                data.candidates.forEach(candidate => {
-                  pc.addIceCandidate(new RTCIceCandidate(candidate))
-                })
-              }
             })
           })
 
           return () => {
             unsubscribe()
-            stream.getTracks().forEach(track => track.stop())
+            // Clean up RTCPeerConnections
             Object.values(peerConnections.current).forEach(pc => pc.close())
+            // Stop all tracks
+            stream.getTracks().forEach(track => track.stop())
           }
         } catch (mediaError) {
-          console.error('Error accessing media devices:', mediaError);
+          console.error('Error accessing media devices:', mediaError)
           // Continue with limited functionality if possible
           if (!mediaError.name.includes('NotAllowed')) {
             // Try audio only if video fails
@@ -240,7 +263,7 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
     }
 
     setupMeeting()
-  }, [meetingId, userId, isHost])
+  }, [meetingId, userId])
 
   const toggleMute = async () => {
     if (localStream) {
