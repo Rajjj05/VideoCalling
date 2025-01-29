@@ -28,9 +28,12 @@ const ICE_SERVERS = {
       urls: [
         'stun:stun1.l.google.com:19302',
         'stun:stun2.l.google.com:19302',
+        'stun:stun3.l.google.com:19302',
+        'stun:stun4.l.google.com:19302',
       ],
     },
   ],
+  iceCandidatePoolSize: 10
 }
 
 export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
@@ -130,71 +133,82 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
             const participantData = participantDoc.data()
             const peerId = participantData.userId
             
-            // Create peer connection
-            const pc = new RTCPeerConnection(ICE_SERVERS)
-            peerConnections.current[peerId] = pc
+            try {
+              console.log('Creating peer connection for:', peerId)
+              const pc = new RTCPeerConnection(ICE_SERVERS)
+              peerConnections.current[peerId] = pc
 
-            // Add local tracks
-            if (stream) {
-              stream.getTracks().forEach(track => {
-                pc.addTrack(track, stream)
-              })
-            }
-
-            // Handle ICE candidates
-            pc.onicecandidate = async (event) => {
-              if (event.candidate) {
-                await addDoc(rtcRef, {
-                  type: 'candidate',
-                  candidate: event.candidate,
-                  senderId: userId,
-                  receiverId: peerId,
-                  timestamp: new Date().toISOString()
+              // Add local tracks to the peer connection
+              if (stream) {
+                stream.getTracks().forEach(track => {
+                  console.log('Adding track to peer connection:', track.kind)
+                  pc.addTrack(track, stream)
                 })
               }
-            }
 
-            pc.oniceconnectionstatechange = () => {
-              console.log(`ICE connection state with ${peerId}:`, pc.iceConnectionState)
-            }
+              // Handle ICE candidates
+              pc.onicecandidate = async (event) => {
+                if (event.candidate) {
+                  console.log('Sending ICE candidate to:', peerId)
+                  await addDoc(rtcRef, {
+                    type: 'candidate',
+                    candidate: event.candidate.toJSON(),
+                    senderId: userId,
+                    receiverId: peerId,
+                    timestamp: new Date().toISOString()
+                  })
+                }
+              }
 
-            // Handle incoming tracks
-            pc.ontrack = (event) => {
-              console.log('Received remote track from:', peerId)
-              const [remoteStream] = event.streams
-              
-              setParticipants(prev => {
-                // Remove any existing entries for this peer
-                const filtered = prev.filter(p => p.userId !== peerId)
+              pc.oniceconnectionstatechange = () => {
+                console.log(`ICE connection state with ${peerId}:`, pc.iceConnectionState)
+                if (pc.iceConnectionState === 'failed') {
+                  // If connection fails, try to restart ICE
+                  pc.restartIce()
+                }
+              }
+
+              pc.ontrack = (event) => {
+                console.log('Received remote track from:', peerId, event.streams[0].getTracks())
+                const [remoteStream] = event.streams
                 
-                return [...filtered, {
-                  id: `remote-${peerId}`,
-                  userId: peerId,
-                  stream: remoteStream,
-                  name: participantData.displayName,
-                  isMuted: participantData.isMuted,
-                  videoOn: participantData.videoOn,
-                  isHost: participantData.isHost
-                }]
-              })
-            }
+                setParticipants(prev => {
+                  const filtered = prev.filter(p => p.userId !== peerId)
+                  return [...filtered, {
+                    id: `remote-${peerId}`,
+                    userId: peerId,
+                    stream: remoteStream,
+                    name: participantData.displayName,
+                    isMuted: participantData.isMuted,
+                    videoOn: participantData.videoOn,
+                    isHost: participantData.isHost
+                  }]
+                })
+              }
 
-            // Create and send offer
-            try {
+              // Create and send offer
               const offer = await pc.createOffer({
                 offerToReceiveAudio: true,
-                offerToReceiveVideo: true
+                offerToReceiveVideo: true,
+                iceRestart: true
               })
+              
+              console.log('Setting local description for:', peerId)
               await pc.setLocalDescription(offer)
+              
+              console.log('Sending offer to:', peerId)
               await addDoc(rtcRef, {
                 type: 'offer',
-                offer: offer,
+                offer: {
+                  type: offer.type,
+                  sdp: offer.sdp
+                },
                 senderId: userId,
                 receiverId: peerId,
                 timestamp: new Date().toISOString()
               })
             } catch (error) {
-              console.error('Error creating offer:', error)
+              console.error('Error in peer connection setup:', error)
             }
           })
 
@@ -206,65 +220,81 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                 if (data.receiverId === userId) {
                   if (data.type === 'offer') {
                     const peerId = data.senderId
-                    let pc = peerConnections.current[peerId]
-                    
-                    if (!pc) {
-                      pc = new RTCPeerConnection(ICE_SERVERS)
-                      peerConnections.current[peerId] = pc
+                    try {
+                      console.log('Received offer from:', peerId)
+                      let pc = peerConnections.current[peerId]
+                      
+                      if (!pc) {
+                        console.log('Creating new peer connection for:', peerId)
+                        pc = new RTCPeerConnection(ICE_SERVERS)
+                        peerConnections.current[peerId] = pc
 
-                      // Add local tracks
-                      if (stream) {
-                        stream.getTracks().forEach(track => {
-                          pc.addTrack(track, stream)
-                        })
-                      }
+                        if (stream) {
+                          stream.getTracks().forEach(track => {
+                            console.log('Adding track to peer connection:', track.kind)
+                            pc.addTrack(track, stream)
+                          })
+                        }
 
-                      pc.onicecandidate = async (event) => {
-                        if (event.candidate) {
-                          await addDoc(rtcRef, {
-                            type: 'candidate',
-                            candidate: event.candidate,
-                            senderId: userId,
-                            receiverId: peerId,
-                            timestamp: new Date().toISOString()
+                        pc.onicecandidate = async (event) => {
+                          if (event.candidate) {
+                            console.log('Sending ICE candidate to:', peerId)
+                            await addDoc(rtcRef, {
+                              type: 'candidate',
+                              candidate: event.candidate.toJSON(),
+                              senderId: userId,
+                              receiverId: peerId,
+                              timestamp: new Date().toISOString()
+                            })
+                          }
+                        }
+
+                        pc.oniceconnectionstatechange = () => {
+                          console.log(`ICE connection state with ${peerId}:`, pc.iceConnectionState)
+                          if (pc.iceConnectionState === 'failed') {
+                            pc.restartIce()
+                          }
+                        }
+
+                        pc.ontrack = (event) => {
+                          console.log('Received remote track from:', peerId, event.streams[0].getTracks())
+                          const [remoteStream] = event.streams
+                          
+                          setParticipants(prev => {
+                            const filtered = prev.filter(p => p.userId !== peerId)
+                            const participantInfo = existingParticipants.docs.find(
+                              doc => doc.data().userId === peerId
+                            )?.data() || {}
+
+                            return [...filtered, {
+                              id: `remote-${peerId}`,
+                              userId: peerId,
+                              stream: remoteStream,
+                              name: participantInfo.displayName || 'Participant',
+                              isMuted: participantInfo.isMuted || false,
+                              videoOn: participantInfo.videoOn || true,
+                              isHost: participantInfo.isHost || false
+                            }]
                           })
                         }
                       }
 
-                      pc.oniceconnectionstatechange = () => {
-                        console.log(`ICE connection state with ${peerId}:`, pc.iceConnectionState)
-                      }
-
-                      pc.ontrack = (event) => {
-                        console.log('Received remote track from:', peerId)
-                        const [remoteStream] = event.streams
-                        
-                        setParticipants(prev => {
-                          const filtered = prev.filter(p => p.userId !== peerId)
-                          const participantInfo = existingParticipants.docs.find(
-                            doc => doc.data().userId === peerId
-                          )?.data() || {}
-
-                          return [...filtered, {
-                            id: `remote-${peerId}`,
-                            userId: peerId,
-                            stream: remoteStream,
-                            name: participantInfo.displayName || 'Participant',
-                            isMuted: participantInfo.isMuted || false,
-                            videoOn: participantInfo.videoOn || true,
-                            isHost: participantInfo.isHost || false
-                          }]
-                        })
-                      }
-                    }
-
-                    try {
+                      console.log('Setting remote description for:', peerId)
                       await pc.setRemoteDescription(new RTCSessionDescription(data.offer))
+                      
+                      console.log('Creating answer for:', peerId)
                       const answer = await pc.createAnswer()
+                      
+                      console.log('Setting local description for:', peerId)
                       await pc.setLocalDescription(answer)
+                      
+                      console.log('Sending answer to:', peerId)
                       await addDoc(rtcRef, {
                         type: 'answer',
-                        answer: answer,
+                        answer: {
+                          type: answer.type,
+                          sdp: answer.sdp
+                        },
                         senderId: userId,
                         receiverId: peerId,
                         timestamp: new Date().toISOString()
@@ -275,12 +305,24 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                   } else if (data.type === 'answer') {
                     const pc = peerConnections.current[data.senderId]
                     if (pc) {
-                      await pc.setRemoteDescription(new RTCSessionDescription(data.answer))
+                      try {
+                        console.log('Received answer from:', data.senderId)
+                        await pc.setRemoteDescription(new RTCSessionDescription(data.answer))
+                        console.log('Set remote description successfully for:', data.senderId)
+                      } catch (error) {
+                        console.error('Error handling answer:', error)
+                      }
                     }
                   } else if (data.type === 'candidate') {
                     const pc = peerConnections.current[data.senderId]
                     if (pc) {
-                      await pc.addIceCandidate(new RTCIceCandidate(data.candidate))
+                      try {
+                        console.log('Received ICE candidate from:', data.senderId)
+                        await pc.addIceCandidate(new RTCIceCandidate(data.candidate))
+                        console.log('Added ICE candidate successfully for:', data.senderId)
+                      } catch (error) {
+                        console.error('Error handling ICE candidate:', error)
+                      }
                     }
                   }
                 }
