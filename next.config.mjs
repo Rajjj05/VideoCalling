@@ -1,4 +1,10 @@
 /** @type {import('next').NextConfig} */
-const nextConfig = {};
-
-export default nextConfig;
+const nextConfig = {
+    output: 'standalone', // Ensure this is correct for deployment
+    experimental: {
+      appDir: true, // Required if using App Router
+    },
+  };
+  
+  module.exports = nextConfig;
+  
