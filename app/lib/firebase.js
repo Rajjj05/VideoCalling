@@ -11,10 +11,16 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-// Initialize Firebase
-const app = typeof window !== "undefined" ? initializeApp(firebaseConfig) : null;
-const auth = app ? getAuth(app) : null;
+// Initialize Firebase only if it hasn't been initialized already
+let app;
+if (!getApps().length) {
+  app = initializeApp(firebaseConfig);
+} else {
+  app = getApps()[0];
+}
 
+// Initialize services
+const auth = getAuth(app);
 const db = getFirestore(app);
 const provider = new GoogleAuthProvider();
 

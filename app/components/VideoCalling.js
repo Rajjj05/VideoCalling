@@ -107,15 +107,29 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
             isHost: meetingData.hostId === userId
           }]);
 
-          // Create a document for this participant in the rtc collection
-          const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`)
-          await addDoc(rtcRef, {
+          // Create participant document first
+          const participantsRef = collection(db, `meetings/${meetingDocId}/participants`)
+          await addDoc(participantsRef, {
             userId: userId,
             displayName: 'You',
             joinedAt: new Date().toISOString(),
             isMuted: false,
             videoOn: true,
             isHost: meetingData.hostId === userId
+          })
+
+          // Create RTC document
+          const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`)
+          const rtcDoc = await addDoc(rtcRef, {
+            userId: userId,
+            displayName: 'You',
+            joinedAt: new Date().toISOString(),
+            isMuted: false,
+            videoOn: true,
+            isHost: meetingData.hostId === userId,
+            offers: {},
+            answers: {},
+            candidates: {}
           })
 
           // Set up signaling
@@ -231,6 +245,10 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
             Object.values(peerConnections.current).forEach(pc => pc.close())
             // Stop all tracks
             stream.getTracks().forEach(track => track.stop())
+            // Clean up participant document
+            if (rtcDoc) {
+              deleteDoc(rtcDoc.ref)
+            }
           }
         } catch (mediaError) {
           console.error('Error accessing media devices:', mediaError)
@@ -299,11 +317,19 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
         
         if (!querySnapshot.empty) {
           const meetingDocId = querySnapshot.docs[0].id;
-          const participantRef = doc(db, 'meetings', meetingDocId, 'participants', userId);
-          await updateDoc(participantRef, { 
-            isMuted: !isMuted,
-            lastUpdated: new Date().toISOString()
-          });
+          // Get participants collection
+          const participantsRef = collection(db, `meetings/${meetingDocId}/participants`);
+          // Query for this user's participant document
+          const participantQuery = query(participantsRef, where('userId', '==', userId));
+          const participantSnapshot = await getDocs(participantQuery);
+          
+          if (!participantSnapshot.empty) {
+            // Update the existing document
+            await updateDoc(participantSnapshot.docs[0].ref, {
+              isMuted: !isMuted,
+              lastUpdated: new Date().toISOString()
+            });
+          }
         }
       } catch (error) {
         console.error('Error toggling mute:', error);
@@ -352,11 +378,19 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
       
       if (!querySnapshot.empty) {
         const meetingDocId = querySnapshot.docs[0].id;
-        const participantRef = doc(db, 'meetings', meetingDocId, 'participants', userId);
-        await updateDoc(participantRef, { 
-          videoOn: !isVideoOff,
-          lastUpdated: new Date().toISOString()
-        });
+        // Get participants collection
+        const participantsRef = collection(db, `meetings/${meetingDocId}/participants`);
+        // Query for this user's participant document
+        const participantQuery = query(participantsRef, where('userId', '==', userId));
+        const participantSnapshot = await getDocs(participantQuery);
+        
+        if (!participantSnapshot.empty) {
+          // Update the existing document
+          await updateDoc(participantSnapshot.docs[0].ref, {
+            videoOn: !isVideoOff,
+            lastUpdated: new Date().toISOString()
+          });
+        }
       }
     } catch (error) {
       console.error('Error toggling video:', error);
@@ -389,9 +423,16 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
           })
         }
 
-        // Remove participant
-        const participantRef = doc(db, 'meetings', meetingDocId, 'participants', userId)
-        await deleteDoc(participantRef)
+        // Get participants collection
+        const participantsRef = collection(db, `meetings/${meetingDocId}/participants`);
+        // Query for this user's participant document
+        const participantQuery = query(participantsRef, where('userId', '==', userId));
+        const participantSnapshot = await getDocs(participantQuery);
+        
+        if (!participantSnapshot.empty) {
+          // Delete the participant document
+          await deleteDoc(participantSnapshot.docs[0].ref);
+        }
       }
       
       // Cleanup
