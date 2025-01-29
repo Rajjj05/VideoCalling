@@ -87,7 +87,8 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
         const meetingData = meetingDoc.data()
         const meetingDocId = meetingDoc.id
 
-        setIsHost(meetingData.hostId === userId)
+        const isUserHost = meetingData.hostId === userId
+        setIsHost(isUserHost)
 
         try {
           // Request initial media permissions
@@ -101,21 +102,21 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
             id: `local-${userId}`,
             userId: userId,
             stream,
-            name: 'You',
+            name: isUserHost ? 'You (Host)' : 'You',
             isMuted: false,
             videoOn: true,
-            isHost: meetingData.hostId === userId
+            isHost: isUserHost
           }]);
 
           // Create participant document first
           const participantsRef = collection(db, `meetings/${meetingDocId}/participants`)
           const participantDoc = await addDoc(participantsRef, {
             userId: userId,
-            displayName: 'You',
+            displayName: isUserHost ? 'Host' : `Participant ${Date.now()}`,
             joinedAt: new Date().toISOString(),
             isMuted: false,
             videoOn: true,
-            isHost: meetingData.hostId === userId
+            isHost: isUserHost
           })
 
           // Set up signaling
@@ -141,7 +142,7 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
             // Handle ICE candidates
             pc.onicecandidate = async (event) => {
               if (event.candidate) {
-                const rtcDoc = await addDoc(rtcRef, {
+                await addDoc(rtcRef, {
                   type: 'candidate',
                   candidate: event.candidate,
                   senderId: userId,
@@ -155,14 +156,14 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
             pc.ontrack = (event) => {
               console.log('Received remote track from:', peerId)
               setParticipants(prev => {
-                const exists = prev.find(p => p.userId === peerId)
-                if (exists) return prev
+                // Remove any existing entries for this peer
+                const filtered = prev.filter(p => p.userId !== peerId)
                 
-                return [...prev, {
+                return [...filtered, {
                   id: `remote-${peerId}`,
                   userId: peerId,
                   stream: event.streams[0],
-                  name: participantData.displayName || `Participant ${prev.length}`,
+                  name: participantData.displayName,
                   isMuted: participantData.isMuted,
                   videoOn: participantData.videoOn,
                   isHost: participantData.isHost
@@ -218,17 +219,22 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                       pc.ontrack = (event) => {
                         console.log('Received remote track from:', peerId)
                         setParticipants(prev => {
-                          const exists = prev.find(p => p.userId === peerId)
-                          if (exists) return prev
+                          // Remove any existing entries for this peer
+                          const filtered = prev.filter(p => p.userId !== peerId)
                           
-                          return [...prev, {
+                          // Get participant info
+                          const participantInfo = existingParticipants.docs.find(
+                            doc => doc.data().userId === peerId
+                          )?.data() || {}
+
+                          return [...filtered, {
                             id: `remote-${peerId}`,
                             userId: peerId,
                             stream: event.streams[0],
-                            name: data.displayName || `Participant ${prev.length}`,
-                            isMuted: false,
-                            videoOn: true,
-                            isHost: false
+                            name: participantInfo.displayName || 'Participant',
+                            isMuted: participantInfo.isMuted || false,
+                            videoOn: participantInfo.videoOn || true,
+                            isHost: participantInfo.isHost || false
                           }]
                         })
                       }
@@ -260,9 +266,37 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
             })
           })
 
+          // Listen for participant updates
+          const participantUnsubscribe = onSnapshot(participantsRef, (snapshot) => {
+            snapshot.docChanges().forEach(change => {
+              const participantData = change.doc.data()
+              if (change.type === 'modified' && participantData.userId !== userId) {
+                setParticipants(prev => {
+                  return prev.map(p => {
+                    if (p.userId === participantData.userId) {
+                      return {
+                        ...p,
+                        isMuted: participantData.isMuted,
+                        videoOn: participantData.videoOn
+                      }
+                    }
+                    return p
+                  })
+                })
+              } else if (change.type === 'removed' && participantData.userId !== userId) {
+                setParticipants(prev => prev.filter(p => p.userId !== participantData.userId))
+                if (peerConnections.current[participantData.userId]) {
+                  peerConnections.current[participantData.userId].close()
+                  delete peerConnections.current[participantData.userId]
+                }
+              }
+            })
+          })
+
           // Cleanup function
           return () => {
             unsubscribe()
+            participantUnsubscribe()
             Object.values(peerConnections.current).forEach(pc => pc.close())
             stream.getTracks().forEach(track => track.stop())
             if (participantDoc) {
@@ -286,7 +320,7 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                 name: 'You',
                 isMuted: false,
                 videoOn: false,
-                isHost: meetingData.hostId === userId
+                isHost: isUserHost
               }]);
             } catch (audioError) {
               console.error('Failed to get audio access:', audioError);
