@@ -17,29 +17,29 @@ export default function MeetingRoom() {
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
+    if (!meetingId) return  // Prevents undefined meetingId from breaking the app
+
     const checkMeeting = async () => {
       try {
-        // Check if meeting exists and is active
-        const meetingsRef = collection(db, 'meetings')
-        const querySnapshot = await getDocs(query(meetingsRef, where('meetingId', '==', meetingId)))
-        
+        const meetingsRef = collection(db, "meetings")
+        const querySnapshot = await getDocs(query(meetingsRef, where("meetingId", "==", meetingId)))
+
         if (querySnapshot.empty) {
-          setError('Meeting not found')
+          setError("Meeting not found")
           return
         }
 
-        const meetingDoc = querySnapshot.docs[0]
-        const meetingData = meetingDoc.data()
+        const meetingData = querySnapshot.docs[0].data()
 
-        if (meetingData.status !== 'active') {
-          setError('This meeting has ended')
+        if (meetingData.status !== "active") {
+          setError("This meeting has ended")
           return
         }
 
         setIsLoading(false)
       } catch (error) {
-        console.error('Error checking meeting:', error)
-        setError('Failed to join meeting')
+        console.error("Error checking meeting:", error)
+        setError("Failed to join meeting")
       }
     }
 
@@ -47,7 +47,17 @@ export default function MeetingRoom() {
   }, [meetingId])
 
   const handleMeetingEnd = () => {
-    router.push('/meetings')
+    router.push("/meetings")
+  }
+
+  if (!meetingId) {
+    return (
+      <ProtectedRoute>
+        <div className="flex items-center justify-center min-h-screen">
+          <p className="text-gray-600">Invalid meeting ID.</p>
+        </div>
+      </ProtectedRoute>
+    )
   }
 
   if (error) {
@@ -57,7 +67,7 @@ export default function MeetingRoom() {
           <div className="bg-red-100 border border-red-400 text-red-700 px-6 py-4 rounded-lg mb-4">
             {error}
           </div>
-          <Button onClick={() => router.push('/meetings')}>
+          <Button onClick={() => router.push("/meetings")}>
             Back to Meetings
           </Button>
         </div>
@@ -78,13 +88,8 @@ export default function MeetingRoom() {
   return (
     <ProtectedRoute>
       <div className="flex flex-col h-screen">
-        <VideoCalling
-          meetingId={meetingId}
-          userId={user.uid}
-          onMeetingEnd={handleMeetingEnd}
-        />
+        <VideoCalling meetingId={meetingId} userId={user?.uid} onMeetingEnd={handleMeetingEnd} />
       </div>
     </ProtectedRoute>
   )
 }
-
