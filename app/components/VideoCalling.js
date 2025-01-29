@@ -135,9 +135,11 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
             peerConnections.current[peerId] = pc
 
             // Add local tracks
-            stream.getTracks().forEach(track => {
-              pc.addTrack(track, stream)
-            })
+            if (stream) {
+              stream.getTracks().forEach(track => {
+                pc.addTrack(track, stream)
+              })
+            }
 
             // Handle ICE candidates
             pc.onicecandidate = async (event) => {
@@ -152,9 +154,15 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
               }
             }
 
+            pc.oniceconnectionstatechange = () => {
+              console.log(`ICE connection state with ${peerId}:`, pc.iceConnectionState)
+            }
+
             // Handle incoming tracks
             pc.ontrack = (event) => {
               console.log('Received remote track from:', peerId)
+              const [remoteStream] = event.streams
+              
               setParticipants(prev => {
                 // Remove any existing entries for this peer
                 const filtered = prev.filter(p => p.userId !== peerId)
@@ -162,7 +170,7 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                 return [...filtered, {
                   id: `remote-${peerId}`,
                   userId: peerId,
-                  stream: event.streams[0],
+                  stream: remoteStream,
                   name: participantData.displayName,
                   isMuted: participantData.isMuted,
                   videoOn: participantData.videoOn,
@@ -172,15 +180,22 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
             }
 
             // Create and send offer
-            const offer = await pc.createOffer()
-            await pc.setLocalDescription(offer)
-            await addDoc(rtcRef, {
-              type: 'offer',
-              offer: offer,
-              senderId: userId,
-              receiverId: peerId,
-              timestamp: new Date().toISOString()
-            })
+            try {
+              const offer = await pc.createOffer({
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: true
+              })
+              await pc.setLocalDescription(offer)
+              await addDoc(rtcRef, {
+                type: 'offer',
+                offer: offer,
+                senderId: userId,
+                receiverId: peerId,
+                timestamp: new Date().toISOString()
+              })
+            } catch (error) {
+              console.error('Error creating offer:', error)
+            }
           })
 
           // Listen for WebRTC signaling messages
@@ -198,11 +213,12 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                       peerConnections.current[peerId] = pc
 
                       // Add local tracks
-                      stream.getTracks().forEach(track => {
-                        pc.addTrack(track, stream)
-                      })
+                      if (stream) {
+                        stream.getTracks().forEach(track => {
+                          pc.addTrack(track, stream)
+                        })
+                      }
 
-                      // Handle ICE candidates
                       pc.onicecandidate = async (event) => {
                         if (event.candidate) {
                           await addDoc(rtcRef, {
@@ -215,14 +231,16 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                         }
                       }
 
-                      // Handle incoming tracks
+                      pc.oniceconnectionstatechange = () => {
+                        console.log(`ICE connection state with ${peerId}:`, pc.iceConnectionState)
+                      }
+
                       pc.ontrack = (event) => {
                         console.log('Received remote track from:', peerId)
+                        const [remoteStream] = event.streams
+                        
                         setParticipants(prev => {
-                          // Remove any existing entries for this peer
                           const filtered = prev.filter(p => p.userId !== peerId)
-                          
-                          // Get participant info
                           const participantInfo = existingParticipants.docs.find(
                             doc => doc.data().userId === peerId
                           )?.data() || {}
@@ -230,7 +248,7 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                           return [...filtered, {
                             id: `remote-${peerId}`,
                             userId: peerId,
-                            stream: event.streams[0],
+                            stream: remoteStream,
                             name: participantInfo.displayName || 'Participant',
                             isMuted: participantInfo.isMuted || false,
                             videoOn: participantInfo.videoOn || true,
@@ -240,16 +258,20 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                       }
                     }
 
-                    await pc.setRemoteDescription(new RTCSessionDescription(data.offer))
-                    const answer = await pc.createAnswer()
-                    await pc.setLocalDescription(answer)
-                    await addDoc(rtcRef, {
-                      type: 'answer',
-                      answer: answer,
-                      senderId: userId,
-                      receiverId: peerId,
-                      timestamp: new Date().toISOString()
-                    })
+                    try {
+                      await pc.setRemoteDescription(new RTCSessionDescription(data.offer))
+                      const answer = await pc.createAnswer()
+                      await pc.setLocalDescription(answer)
+                      await addDoc(rtcRef, {
+                        type: 'answer',
+                        answer: answer,
+                        senderId: userId,
+                        receiverId: peerId,
+                        timestamp: new Date().toISOString()
+                      })
+                    } catch (error) {
+                      console.error('Error handling offer:', error)
+                    }
                   } else if (data.type === 'answer') {
                     const pc = peerConnections.current[data.senderId]
                     if (pc) {
@@ -623,7 +645,7 @@ function ParticipantTile({ participant }) {
             ref={videoRef}
             autoPlay
             playsInline
-            muted={participant.id === 'You'}
+            muted={participant.id.startsWith('local-')}
             className="w-full h-full object-cover"
           />
         ) : (
