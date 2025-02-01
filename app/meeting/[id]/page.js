@@ -1,95 +1,46 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { useParams, useRouter } from "next/navigation"
-import { Button } from "../../../components/ui/button"
-import { ProtectedRoute } from "../../components/ProtectedRoute"
-import { VideoCalling } from "../../components/VideoCalling"
+import { useEffect, useState } from "react"
+import { useParams } from "next/navigation"
 import { useAuth } from "../../contexts/AuthContext"
-import { db } from "../../lib/firebase"
-import { collection, getDocs, query, where } from "firebase/firestore"
+import VideoCalling from "../../components/VideoCalling"
+import { Loader2 } from "lucide-react"
 
-export default function MeetingRoom() {
-  const { id: meetingId } = useParams()
+export default function MeetingPage() {
+  const { id } = useParams()
   const { user } = useAuth()
-  const router = useRouter()
-  const [error, setError] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
-    if (!meetingId) return  // Prevents undefined meetingId from breaking the app
-
-    const checkMeeting = async () => {
-      try {
-        const meetingsRef = collection(db, "meetings")
-        const querySnapshot = await getDocs(query(meetingsRef, where("meetingId", "==", meetingId)))
-
-        if (querySnapshot.empty) {
-          setError("Meeting not found")
-          return
-        }
-
-        const meetingData = querySnapshot.docs[0].data()
-
-        if (meetingData.status !== "active") {
-          setError("This meeting has ended")
-          return
-        }
-
-        setIsLoading(false)
-      } catch (error) {
-        console.error("Error checking meeting:", error)
-        setError("Failed to join meeting")
-      }
+    // Wait for user authentication
+    if (user) {
+      setIsLoading(false)
     }
-
-    checkMeeting()
-  }, [meetingId])
-
-  const handleMeetingEnd = () => {
-    router.push("/meetings")
-  }
-
-  if (!meetingId) {
-    return (
-      <ProtectedRoute>
-        <div className="flex items-center justify-center min-h-screen">
-          <p className="text-gray-600">Invalid meeting ID.</p>
-        </div>
-      </ProtectedRoute>
-    )
-  }
-
-  if (error) {
-    return (
-      <ProtectedRoute>
-        <div className="flex flex-col items-center justify-center min-h-screen">
-          <div className="bg-red-100 border border-red-400 text-red-700 px-6 py-4 rounded-lg mb-4">
-            {error}
-          </div>
-          <Button onClick={() => router.push("/meetings")}>
-            Back to Meetings
-          </Button>
-        </div>
-      </ProtectedRoute>
-    )
-  }
+  }, [user])
 
   if (isLoading) {
     return (
-      <ProtectedRoute>
-        <div className="flex items-center justify-center min-h-screen">
-          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-gray-900"></div>
-        </div>
-      </ProtectedRoute>
+      <div className="flex items-center justify-center h-screen">
+        <Loader2 className="h-8 w-8 animate-spin" />
+      </div>
+    )
+  }
+
+  if (!user) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <p className="text-lg">Please sign in to join the meeting.</p>
+      </div>
     )
   }
 
   return (
-    <ProtectedRoute>
-      <div className="flex flex-col h-screen">
-        <VideoCalling meetingId={meetingId} userId={user?.uid} onMeetingEnd={handleMeetingEnd} />
-      </div>
-    </ProtectedRoute>
+    <div className="container mx-auto p-4 h-screen">
+      <VideoCalling
+        meetingId={id}
+        userId={user.uid}
+        userName={user.displayName || 'Anonymous'}
+      />
+    </div>
   )
 }

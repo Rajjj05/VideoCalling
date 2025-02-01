@@ -1,0 +1,51 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper function to check if user is the document owner
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    // Meetings collection
+    match /meetings/{meetingId} {
+      allow create: if isAuthenticated();
+      allow read: if isAuthenticated();
+      
+      // Participants subcollection
+      match /participants/{participantId} {
+        allow read, write: if isAuthenticated();
+        
+        // Allow access to ICE candidates
+        match /candidates/{candidateId} {
+          allow read, write: if isAuthenticated();
+        }
+        
+        // Allow access to offers and answers
+        match /offers/{offerId} {
+          allow read, write: if isAuthenticated();
+        }
+        match /answers/{answerId} {
+          allow read, write: if isAuthenticated();
+        }
+      }
+    }
+
+    // Meeting history
+    match /meetingHistory/{historyId} {
+      allow create: if isAuthenticated() && isOwner(request.resource.data.userId);
+      allow read: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+
+    // Notes
+    match /notes/{noteId} {
+      allow create: if isAuthenticated() && isOwner(request.resource.data.userId);
+      allow read, update, delete: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+  }
+} 

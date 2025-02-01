@@ -30,7 +30,6 @@ const ICE_SERVERS = {
         'stun:stun2.l.google.com:19302',
       ],
     },
-    // Add TURN server for reliable connectivity
     {
       urls: 'turn:openrelay.metered.ca:80',
       username: 'openrelayproject',
@@ -40,14 +39,21 @@ const ICE_SERVERS = {
       urls: 'turn:openrelay.metered.ca:443',
       username: 'openrelayproject',
       credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
     }
   ],
+  iceCandidatePoolSize: 10,
 }
 
 export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
   const [participants, setParticipants] = useState([])
   const [currentPage, setCurrentPage] = useState(1)
   const [localStream, setLocalStream] = useState(null)
+  const [remoteStreams, setRemoteStreams] = useState({})
   const [isMuted, setIsMuted] = useState(false)
   const [isVideoOff, setIsVideoOff] = useState(false)
   const [isHost, setIsHost] = useState(false)
@@ -55,6 +61,7 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
   const [mediaError, setMediaError] = useState(null)
   const peerConnections = useRef({})
   const startTime = useRef(Date.now())
+  const localVideoRef = useRef(null)
 
   // Function to request media permissions
   const requestMediaPermissions = async (video = true, audio = true) => {
@@ -133,20 +140,10 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
         console.log('Received remote track from:', peerId, event.streams[0].getTracks())
         const [remoteStream] = event.streams
         
-        setParticipants(prev => {
-          const filtered = prev.filter(p => p.userId !== peerId)
-          const newParticipant = {
-            id: `remote-${peerId}`,
-            userId: peerId,
-            stream: remoteStream,
-            name: participantData?.displayName || 'Participant',
-            isMuted: participantData?.isMuted || false,
-            videoOn: participantData?.videoOn || true,
-            isHost: participantData?.isHost || false
-          }
-          console.log('Adding participant:', newParticipant)
-          return [...filtered, newParticipant]
-        })
+        setRemoteStreams(prev => ({
+          ...prev,
+          [peerId]: remoteStream
+        }))
       }
 
       if (initiator) {
