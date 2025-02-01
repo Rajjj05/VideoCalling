@@ -30,11 +30,6 @@ const ICE_SERVERS = {
         'stun:stun2.l.google.com:19302',
       ],
     },
-    {
-      urls: 'turn:numb.viagenie.ca',
-      credential: 'muazkh',
-      username: 'webrtc@live.com'
-    },
   ],
 }
 
@@ -75,9 +70,9 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
     }
   };
 
-  const createPeerConnection = async (peerId, stream, participantData) => {
+  const createPeerConnection = async (peerId, stream, participantData, initiator = false) => {
     try {
-      console.log('Creating peer connection for:', peerId)
+      console.log('Creating peer connection for:', peerId, 'initiator:', initiator)
       const pc = new RTCPeerConnection(ICE_SERVERS)
       peerConnections.current[peerId] = pc
 
@@ -114,6 +109,8 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
       pc.oniceconnectionstatechange = () => {
         console.log(`ICE connection state with ${peerId}:`, pc.iceConnectionState)
         if (pc.iceConnectionState === 'failed') {
+          // If connection fails, try reconnecting
+          console.log('Connection failed, attempting to reconnect...')
           pc.restartIce()
         }
       }
@@ -134,6 +131,37 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
             isHost: participantData?.isHost || false
           }]
         })
+      }
+
+      if (initiator) {
+        try {
+          const offer = await pc.createOffer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true
+          })
+          await pc.setLocalDescription(offer)
+          
+          const meetingsRef = collection(db, 'meetings')
+          const meetingQuery = query(meetingsRef, where('meetingId', '==', meetingId))
+          const querySnapshot = await getDocs(meetingQuery)
+          
+          if (!querySnapshot.empty) {
+            const meetingDocId = querySnapshot.docs[0].id
+            const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`)
+            await addDoc(rtcRef, {
+              type: 'offer',
+              offer: {
+                type: offer.type,
+                sdp: offer.sdp
+              },
+              senderId: userId,
+              receiverId: peerId,
+              timestamp: new Date().toISOString()
+            })
+          }
+        } catch (error) {
+          console.error('Error creating offer:', error)
+        }
       }
 
       return pc
@@ -161,7 +189,7 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
         const meetingData = meetingDoc.data()
         const meetingDocId = meetingDoc.id
 
-        // Check if the user is the host by comparing with the original meeting creator
+        // Check if the user is the host
         const isUserHost = meetingData.hostId === userId
         setIsHost(isUserHost)
 
@@ -172,7 +200,7 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
           setIsMuted(false)
           setIsVideoOff(false)
 
-          // Add local participant with correct role
+          // Add local participant
           const localParticipant = {
             id: `local-${userId}`,
             userId: userId,
@@ -184,7 +212,7 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
           }
           setParticipants([localParticipant])
 
-          // Create participant document with correct role
+          // Create participant document
           const participantsRef = collection(db, `meetings/${meetingDocId}/participants`)
           const participantDoc = await addDoc(participantsRef, {
             userId: userId,
@@ -198,120 +226,95 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
 
           // Set up signaling
           const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`)
-          
-          // Listen for existing participants and create connections
+
+          // Listen for participants
           const participantUnsubscribe = onSnapshot(participantsRef, async (snapshot) => {
-            for (const change of snapshot.docChanges()) {
+            const changes = snapshot.docChanges()
+            console.log('Participant changes:', changes.length)
+
+            for (const change of changes) {
               const participantData = change.doc.data()
-              
-              if (change.type === 'added' && participantData.userId !== userId) {
-                try {
-                  const peerId = participantData.userId
-                  if (!peerConnections.current[peerId]) {
-                    const pc = await createPeerConnection(peerId, stream, participantData)
-                    
-                    // Create and send offer
-                    const offer = await pc.createOffer({
-                      offerToReceiveAudio: true,
-                      offerToReceiveVideo: true
-                    })
-                    
-                    await pc.setLocalDescription(offer)
-                    
-                    await addDoc(rtcRef, {
-                      type: 'offer',
-                      offer: {
-                        type: offer.type,
-                        sdp: offer.sdp
-                      },
-                      senderId: userId,
-                      receiverId: peerId,
-                      timestamp: new Date().toISOString()
-                    })
-                  }
-                } catch (error) {
-                  console.error('Error setting up peer connection:', error)
+              const peerId = participantData.userId
+
+              if (peerId === userId) continue // Skip self
+
+              if (change.type === 'added') {
+                console.log('New participant:', participantData)
+                // Create a peer connection as initiator
+                if (!peerConnections.current[peerId]) {
+                  await createPeerConnection(peerId, stream, participantData, true)
                 }
-              } else if (change.type === 'modified' && participantData.userId !== userId) {
-                setParticipants(prev => {
-                  return prev.map(p => {
-                    if (p.userId === participantData.userId) {
-                      return {
-                        ...p,
-                        isMuted: participantData.isMuted,
-                        videoOn: participantData.videoOn,
-                        name: participantData.displayName,
-                        isHost: participantData.isHost
-                      }
-                    }
-                    return p
-                  })
-                })
-              } else if (change.type === 'removed' && participantData.userId !== userId) {
-                setParticipants(prev => prev.filter(p => p.userId !== participantData.userId))
-                if (peerConnections.current[participantData.userId]) {
-                  peerConnections.current[participantData.userId].close()
-                  delete peerConnections.current[participantData.userId]
+              } else if (change.type === 'modified') {
+                setParticipants(prev => prev.map(p => 
+                  p.userId === peerId ? {
+                    ...p,
+                    isMuted: participantData.isMuted,
+                    videoOn: participantData.videoOn,
+                    name: participantData.displayName
+                  } : p
+                ))
+              } else if (change.type === 'removed') {
+                console.log('Participant removed:', peerId)
+                setParticipants(prev => prev.filter(p => p.userId !== peerId))
+                if (peerConnections.current[peerId]) {
+                  peerConnections.current[peerId].close()
+                  delete peerConnections.current[peerId]
                 }
               }
             }
           })
 
-          // Listen for WebRTC signaling messages
+          // Listen for WebRTC signaling
           const rtcUnsubscribe = onSnapshot(rtcRef, async (snapshot) => {
-            for (const change of snapshot.docChanges()) {
+            const changes = snapshot.docChanges()
+            console.log('RTC changes:', changes.length)
+
+            for (const change of changes) {
               if (change.type === 'added') {
                 const data = change.doc.data()
-                if (data.receiverId === userId) {
+                if (data.receiverId !== userId) continue
+
+                console.log('Received message:', data.type, 'from:', data.senderId)
+
+                try {
                   if (data.type === 'offer') {
                     const peerId = data.senderId
-                    try {
-                      let pc = peerConnections.current[peerId]
-                      if (!pc) {
-                        // Get participant info from Firestore
-                        const participantQuery = query(participantsRef, where('userId', '==', peerId))
-                        const participantSnapshot = await getDocs(participantQuery)
-                        const participantData = participantSnapshot.docs[0]?.data()
-                        
-                        pc = await createPeerConnection(peerId, stream, participantData)
-                      }
+                    let pc = peerConnections.current[peerId]
 
-                      await pc.setRemoteDescription(new RTCSessionDescription(data.offer))
-                      const answer = await pc.createAnswer()
-                      await pc.setLocalDescription(answer)
-                      
-                      await addDoc(rtcRef, {
-                        type: 'answer',
-                        answer: {
-                          type: answer.type,
-                          sdp: answer.sdp
-                        },
-                        senderId: userId,
-                        receiverId: peerId,
-                        timestamp: new Date().toISOString()
-                      })
-                    } catch (error) {
-                      console.error('Error handling offer:', error)
+                    if (!pc) {
+                      const participantQuery = query(participantsRef, where('userId', '==', peerId))
+                      const participantSnapshot = await getDocs(participantQuery)
+                      const participantData = participantSnapshot.docs[0]?.data()
+                      pc = await createPeerConnection(peerId, stream, participantData, false)
                     }
+
+                    await pc.setRemoteDescription(new RTCSessionDescription(data.offer))
+                    const answer = await pc.createAnswer()
+                    await pc.setLocalDescription(answer)
+
+                    await addDoc(rtcRef, {
+                      type: 'answer',
+                      answer: {
+                        type: answer.type,
+                        sdp: answer.sdp
+                      },
+                      senderId: userId,
+                      receiverId: peerId,
+                      timestamp: new Date().toISOString()
+                    })
                   } else if (data.type === 'answer') {
                     const pc = peerConnections.current[data.senderId]
                     if (pc) {
-                      try {
-                        await pc.setRemoteDescription(new RTCSessionDescription(data.answer))
-                      } catch (error) {
-                        console.error('Error handling answer:', error)
-                      }
+                      await pc.setRemoteDescription(new RTCSessionDescription(data.answer))
                     }
                   } else if (data.type === 'candidate') {
                     const pc = peerConnections.current[data.senderId]
                     if (pc) {
-                      try {
-                        await pc.addIceCandidate(new RTCIceCandidate(data.candidate))
-                      } catch (error) {
-                        console.error('Error handling ICE candidate:', error)
-                      }
+                      await pc.addIceCandidate(new RTCIceCandidate(data.candidate))
                     }
                   }
+                } catch (error) {
+                  console.error('Error handling WebRTC message:', error)
                 }
               }
             }
@@ -319,6 +322,7 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
 
           // Cleanup function
           return () => {
+            console.log('Cleaning up...')
             rtcUnsubscribe()
             participantUnsubscribe()
             Object.values(peerConnections.current).forEach(pc => pc.close())
