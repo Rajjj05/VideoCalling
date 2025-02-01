@@ -1,56 +1,57 @@
-"use client"
+"use client";
 
-import { useState, useEffect, useRef, useCallback } from "react"
-import { Button } from "../../components/ui/button"
-import { ChevronLeftIcon, ChevronRightIcon, CopyIcon, CheckIcon } from "@radix-ui/react-icons"
-import { Card, CardContent } from "../../components/ui/card"
-import { Badge } from "../../components/ui/badge"
-import { db } from "../lib/firebase"
-import { 
-  collection, 
-  addDoc, 
-  onSnapshot, 
-  doc, 
-  updateDoc, 
-  deleteDoc, 
-  getDocs, 
-  query, 
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Button } from "../../components/ui/button";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CopyIcon,
+  CheckIcon,
+} from "@radix-ui/react-icons";
+import { Card, CardContent } from "../../components/ui/card";
+import { Badge } from "../../components/ui/badge";
+import {
+  collection,
+  addDoc,
+  onSnapshot,
+  doc,
+  updateDoc,
+  deleteDoc,
+  getDocs,
+  query,
   where,
-  getFirestore,
-  arrayUnion,
-  serverTimestamp
-} from "firebase/firestore"
-import { saveMeetingHistory } from "../lib/firestore"
+  serverTimestamp,
+} from "firebase/firestore";
+import { db } from "../lib/firebase";
+import { saveMeetingHistory } from "../lib/firestore";
 
-const PARTICIPANTS_PER_PAGE = 10
+const PARTICIPANTS_PER_PAGE = 10;
+
+// Use an ICE server configuration that merges the improvements.
+// (Feel free to add additional TURN servers if desired.)
 const ICE_SERVERS = {
   iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
     {
-      urls: [
-        'stun:stun1.l.google.com:19302',
-        'stun:stun2.l.google.com:19302',
-      ],
+      urls: "turn:global.relay.metered.ca:80",
+      username: "14d1d3a0d3a8e901f0e4999b",
+      credential: "7xR3j5YVEqZb9K+6",
     },
     {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
+      urls: "turn:global.relay.metered.ca:80?transport=tcp",
+      username: "14d1d3a0d3a8e901f0e4999b",
+      credential: "7xR3j5YVEqZb9K+6",
     },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    }
   ],
   iceCandidatePoolSize: 10,
-}
+};
 
-function ParticipantTile({ participant, stream, isLocal = false, isVideoOff = false }) {
+function ParticipantTile({
+  participant,
+  stream,
+  isLocal = false,
+  isVideoOff = false,
+}) {
   const videoRef = useRef(null);
 
   useEffect(() => {
@@ -62,7 +63,7 @@ function ParticipantTile({ participant, stream, isLocal = false, isVideoOff = fa
   return (
     <Card className="relative aspect-video overflow-hidden">
       <CardContent className="p-0 h-full">
-        {(!isVideoOff || !isLocal) && stream && (
+        {(!isVideoOff || !isLocal) && stream ? (
           <video
             ref={videoRef}
             autoPlay
@@ -70,15 +71,17 @@ function ParticipantTile({ participant, stream, isLocal = false, isVideoOff = fa
             muted={isLocal}
             className="w-full h-full object-cover"
           />
-        )}
-        {(isVideoOff || !stream) && (
+        ) : (
           <div className="flex items-center justify-center w-full h-full bg-secondary">
-            <span className="text-4xl">{participant.userName?.[0]?.toUpperCase() || 'U'}</span>
+            <span className="text-4xl">
+              {participant.userName?.[0]?.toUpperCase() || "U"}
+            </span>
           </div>
         )}
         <div className="absolute bottom-2 left-2 right-2 flex justify-between items-center">
           <Badge variant="secondary" className="text-xs">
-            {isLocal ? "You" : participant.userName} {participant.isHost && "(Host)"}
+            {isLocal ? "You" : participant.userName}{" "}
+            {participant.isHost && "(Host)"}
           </Badge>
           {participant.isMuted && (
             <Badge variant="destructive" className="text-xs">
@@ -91,194 +94,329 @@ function ParticipantTile({ participant, stream, isLocal = false, isVideoOff = fa
   );
 }
 
-export default function VideoCalling({ meetingId, userId, userName, onMeetingEnd }) {
-  const [participants, setParticipants] = useState([])
-  const [currentPage, setCurrentPage] = useState(1)
-  const [localStream, setLocalStream] = useState(null)
-  const [remoteStreams, setRemoteStreams] = useState({})
-  const [isMuted, setIsMuted] = useState(false)
-  const [isVideoOff, setIsVideoOff] = useState(false)
-  const [isHost, setIsHost] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const [mediaError, setMediaError] = useState(null)
-  const [isInitializing, setIsInitializing] = useState(true)
-  const peerConnections = useRef({})
-  const startTime = useRef(Date.now())
-  const localVideoRef = useRef(null)
-  const cleanupRef = useRef(false)
+export default function VideoCalling({
+  meetingId,
+  userId,
+  userName,
+  onMeetingEnd,
+}) {
+  const [participants, setParticipants] = useState([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStreams, setRemoteStreams] = useState({});
+  const [isMuted, setIsMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
+  const [isHost, setIsHost] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [mediaError, setMediaError] = useState(null);
+  const peerConnections = useRef({});
+  const startTime = useRef(Date.now());
+  const cleanupRef = useRef(false);
 
-  // Function to request media permissions with retry logic
-  const requestMediaPermissions = useCallback(async (video = true, audio = true, retryCount = 0) => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: video ? {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: 'user'
-        } : false,
-        audio: audio ? {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        } : false
-      });
-      setMediaError(null)
-      return stream;
-    } catch (error) {
-      console.error('Media permission error:', error);
-      setMediaError(error.message);
-
-      if (retryCount < 2) {
-        // Wait for a short time before retrying
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        return requestMediaPermissions(video, audio, retryCount + 1);
+  // Request media permissions with retry logic.
+  const requestMediaPermissions = useCallback(
+    async (video = true, audio = true, retryCount = 0) => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: video
+            ? {
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+                facingMode: "user",
+              }
+            : false,
+          audio: audio
+            ? {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              }
+            : false,
+        });
+        setMediaError(null);
+        return stream;
+      } catch (error) {
+        console.error("Media permission error:", error);
+        setMediaError(error.message);
+        if (retryCount < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          return requestMediaPermissions(video, audio, retryCount + 1);
+        }
+        if (error.name === "NotAllowedError") {
+          alert(
+            "Please allow camera and microphone access to join the meeting."
+          );
+        } else if (error.name === "NotFoundError") {
+          alert("No camera or microphone found. Please check your devices.");
+        } else if (error.name === "NotReadableError") {
+          alert(
+            "Your camera or microphone is already in use by another application."
+          );
+        } else {
+          alert(
+            "Error accessing media devices. Please check your permissions and try again."
+          );
+        }
+        throw error;
       }
+    },
+    []
+  );
 
-      if (error.name === 'NotAllowedError') {
-        alert('Please allow camera and microphone access to join the meeting.');
-      } else if (error.name === 'NotFoundError') {
-        alert('No camera or microphone found. Please check your devices.');
-      } else if (error.name === 'NotReadableError') {
-        alert('Your camera or microphone is already in use by another application.');
-      } else {
-        alert('Error accessing media devices. Please check your permissions and try again.');
-      }
-      throw error;
-    }
-  }, []);
-
-  // Enhanced cleanup function
-  const cleanup = useCallback(async () => {
-    if (cleanupRef.current) return;
-    cleanupRef.current = true;
-
+  // Create (or recreate) a peer connection for a given peer.
+  const createPeerConnection = async (peerId, initiator = false) => {
     try {
-      // Stop all tracks in the local stream
+      const pc = new RTCPeerConnection(ICE_SERVERS);
+      peerConnections.current[peerId] = pc;
+
+      // Add local tracks to the connection.
       if (localStream) {
-        localStream.getTracks().forEach(track => {
-          track.stop();
+        localStream.getTracks().forEach((track) => {
+          pc.addTrack(track, localStream);
         });
       }
 
-      // Close all peer connections
-      Object.values(peerConnections.current).forEach(pc => {
-        if (pc && typeof pc.close === 'function') {
-          pc.close();
+      // Send ICE candidates to the peer.
+      pc.onicecandidate = async ({ candidate }) => {
+        if (candidate) {
+          const meetingsRef = collection(db, "meetings");
+          const meetingQuery = query(
+            meetingsRef,
+            where("meetingId", "==", meetingId)
+          );
+          const querySnapshot = await getDocs(meetingQuery);
+          if (!querySnapshot.empty) {
+            const meetingDocId = querySnapshot.docs[0].id;
+            const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`);
+            await addDoc(rtcRef, {
+              type: "candidate",
+              candidate: candidate.toJSON(),
+              senderId: userId,
+              receiverId: peerId,
+              timestamp: new Date().toISOString(),
+            });
+          }
         }
-      });
+      };
 
-      // Clear all state
-      setLocalStream(null);
-      setRemoteStreams({});
-      peerConnections.current = {};
+      // Reconnect if the ICE connection state degrades.
+      pc.oniceconnectionstatechange = () => {
+        if (["disconnected", "failed"].includes(pc.iceConnectionState)) {
+          console.log(
+            `Connection with ${peerId} is ${pc.iceConnectionState}. Attempting to reconnect...`
+          );
+          if (initiator) {
+            pc.restartIce();
+            createAndSendOffer(pc, peerId);
+          }
+        }
+      };
+
+      // When a remote track is received, update the remoteStreams state.
+      pc.ontrack = (event) => {
+        const [remoteStream] = event.streams;
+        setRemoteStreams((prev) => ({
+          ...prev,
+          [peerId]: remoteStream,
+        }));
+      };
+
+      if (initiator) {
+        await createAndSendOffer(pc, peerId);
+      }
+      return pc;
     } catch (error) {
-      console.error('Error during cleanup:', error);
+      console.error("Error creating peer connection for", peerId, error);
+      throw error;
     }
+  };
+
+  // Create an offer and send it via Firestore signaling.
+  const createAndSendOffer = async (pc, peerId) => {
+    try {
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true,
+        iceRestart: true,
+      });
+      await pc.setLocalDescription(offer);
+      const meetingsRef = collection(db, "meetings");
+      const meetingQuery = query(
+        meetingsRef,
+        where("meetingId", "==", meetingId)
+      );
+      const querySnapshot = await getDocs(meetingQuery);
+      if (!querySnapshot.empty) {
+        const meetingDocId = querySnapshot.docs[0].id;
+        const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`);
+        await addDoc(rtcRef, {
+          type: "offer",
+          offer: { type: offer.type, sdp: offer.sdp },
+          senderId: userId,
+          receiverId: peerId,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      console.error("Error creating and sending offer:", error);
+    }
+  };
+
+  // Handle incoming RTC signaling messages.
+  const handleRTCMessage = async (data, participantsRef) => {
+    try {
+      let pc = peerConnections.current[data.senderId];
+      if (!pc) {
+        // Create a peer connection if one doesn’t exist yet.
+        pc = await createPeerConnection(data.senderId);
+      }
+      if (data.type === "offer") {
+        await pc.setRemoteDescription(data.offer);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        // Send answer back via Firestore.
+        const meetingsRef = collection(db, "meetings");
+        const meetingQuery = query(
+          meetingsRef,
+          where("meetingId", "==", meetingId)
+        );
+        const querySnapshot = await getDocs(meetingQuery);
+        if (!querySnapshot.empty) {
+          const meetingDocId = querySnapshot.docs[0].id;
+          const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`);
+          await addDoc(rtcRef, {
+            type: "answer",
+            answer: { type: answer.type, sdp: answer.sdp },
+            senderId: userId,
+            receiverId: data.senderId,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } else if (data.type === "answer") {
+        await pc.setRemoteDescription(data.answer);
+      } else if (data.type === "candidate") {
+        try {
+          await pc.addIceCandidate(data.candidate);
+        } catch (err) {
+          // Buffer candidate if remote description isn’t set yet.
+          pc.candidateBuffer = pc.candidateBuffer || [];
+          pc.candidateBuffer.push(data.candidate);
+        }
+      }
+    } catch (error) {
+      console.error("Error handling RTC message:", error);
+    }
+  };
+
+  // Cleanup function to stop all tracks and close connections.
+  const cleanup = useCallback(async () => {
+    if (cleanupRef.current) return;
+    cleanupRef.current = true;
+    if (localStream) {
+      localStream.getTracks().forEach((track) => track.stop());
+    }
+    Object.values(peerConnections.current).forEach((pc) => {
+      if (pc && typeof pc.close === "function") pc.close();
+    });
+    setLocalStream(null);
+    setRemoteStreams({});
+    peerConnections.current = {};
   }, [localStream]);
 
-  // Setup effect
+  // Setup meeting: initialize media, add this user to participants,
+  // and set up Firestore listeners for participants and RTC messages.
   useEffect(() => {
     let unsubscribeParticipants = null;
     let unsubscribeRTC = null;
 
     const setupMeeting = async () => {
       try {
-        const meetingsRef = collection(db, 'meetings');
-        const meetingQuery = query(meetingsRef, where('meetingId', '==', meetingId));
-        const querySnapshot = await getDocs(meetingQuery);
-
-        if (querySnapshot.empty) {
-          throw new Error('Meeting not found');
+        // Locate the meeting document.
+        const meetingsRef = collection(db, "meetings");
+        const meetingQuery = query(
+          meetingsRef,
+          where("meetingId", "==", meetingId)
+        );
+        const meetingSnapshot = await getDocs(meetingQuery);
+        if (meetingSnapshot.empty) {
+          throw new Error("Meeting not found");
         }
-
-        const meetingDoc = querySnapshot.docs[0];
+        const meetingDoc = meetingSnapshot.docs[0];
         const meetingData = meetingDoc.data();
         const meetingDocId = meetingDoc.id;
 
-        if (meetingData.status === 'ended') {
-          throw new Error('This meeting has ended');
+        if (meetingData.status === "ended") {
+          throw new Error("This meeting has ended");
         }
 
         const isUserHost = meetingData.hostId === userId;
         setIsHost(isUserHost);
 
-        // Initialize media stream
+        // Request media.
         const stream = await requestMediaPermissions();
         if (cleanupRef.current) return;
-        
         setLocalStream(stream);
 
-        // Add local participant
+        // Add local participant.
         const localParticipant = {
           userId,
           userName,
           isHost: isUserHost,
           isMuted: false,
-          isVideoOff: false
+          videoOn: true,
         };
-        setParticipants(prev => [localParticipant]);
+        setParticipants((prev) => [localParticipant]);
 
-        const participantsRef = collection(db, `meetings/${meetingDocId}/participants`);
-        const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`);
-
-        // Add to participants collection
+        // Add this participant to Firestore.
+        const participantsRef = collection(
+          db,
+          `meetings/${meetingDocId}/participants`
+        );
         await addDoc(participantsRef, {
           userId,
           userName,
           joinedAt: serverTimestamp(),
           isHost: isUserHost,
           isMuted: false,
-          videoOn: true
+          videoOn: true,
         });
 
-        // Listen for participants
+        // Listen for changes in the participants list.
         unsubscribeParticipants = onSnapshot(participantsRef, (snapshot) => {
           if (cleanupRef.current) return;
-          
           const currentParticipants = [];
           snapshot.forEach((doc) => {
-            const participantData = doc.data();
-            if (participantData.userId !== userId) {
-              currentParticipants.push({
-                ...participantData,
-                docId: doc.id
-              });
+            const data = doc.data();
+            if (data.userId !== userId) {
+              currentParticipants.push({ ...data, docId: doc.id });
             }
           });
-          
-          setParticipants(prev => {
-            const localParticipant = prev.find(p => p.userId === userId) || {
-              userId,
-              userName,
-              isHost: isUserHost,
-              isMuted: false,
-              isVideoOff: false
-            };
-            return [localParticipant, ...currentParticipants];
+          setParticipants((prev) => {
+            const localExists = prev.find((p) => p.userId === userId);
+            return localExists
+              ? [localExists, ...currentParticipants]
+              : [localParticipant, ...currentParticipants];
           });
         });
 
-        // Listen for RTC signaling
+        // Listen for RTC signaling messages.
+        const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`);
         unsubscribeRTC = onSnapshot(rtcRef, async (snapshot) => {
           if (cleanupRef.current) return;
-          const changes = snapshot.docChanges();
-          
-          for (const change of changes) {
-            if (change.type === 'added') {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === "added") {
               const data = change.doc.data();
+              // Process only messages intended for this user.
               if (data.receiverId === userId) {
                 handleRTCMessage(data, participantsRef);
               }
             }
-          }
+          });
         });
-
       } catch (error) {
-        console.error('Error setting up meeting:', error);
+        console.error("Error setting up meeting:", error);
         setMediaError(error.message);
-        if (typeof onMeetingEnd === 'function') {
-          onMeetingEnd();
-        }
+        if (typeof onMeetingEnd === "function") onMeetingEnd();
       }
     };
 
@@ -286,163 +424,66 @@ export default function VideoCalling({ meetingId, userId, userName, onMeetingEnd
 
     return () => {
       cleanup();
-      if (unsubscribeParticipants) unsubscribeParticipants();
-      if (unsubscribeRTC) unsubscribeRTC();
+      unsubscribeParticipants && unsubscribeParticipants();
+      unsubscribeRTC && unsubscribeRTC();
     };
-  }, [meetingId, userId, userName, requestMediaPermissions, cleanup, onMeetingEnd]);
-
-  const createPeerConnection = async (peerId, stream, participantData, initiator = false) => {
-    try {
-      console.log('Creating peer connection for:', peerId, 'initiator:', initiator)
-      const pc = new RTCPeerConnection(ICE_SERVERS)
-      peerConnections.current[peerId] = pc
-
-      // Add all local tracks to the peer connection
-      if (stream) {
-        stream.getTracks().forEach(track => {
-          console.log('Adding track to peer connection:', track.kind)
-          pc.addTrack(track, stream)
-        })
-      }
-
-      // Handle ICE candidates
-      pc.onicecandidate = async (event) => {
-        if (event.candidate) {
-          console.log('Sending ICE candidate to:', peerId)
-          const meetingsRef = collection(db, 'meetings')
-          const meetingQuery = query(meetingsRef, where('meetingId', '==', meetingId))
-          const querySnapshot = await getDocs(meetingQuery)
-          
-          if (!querySnapshot.empty) {
-            const meetingDocId = querySnapshot.docs[0].id
-            const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`)
-            await addDoc(rtcRef, {
-              type: 'candidate',
-              candidate: event.candidate.toJSON(),
-              senderId: userId,
-              receiverId: peerId,
-              timestamp: new Date().toISOString()
-            })
-          }
-        }
-      }
-
-      pc.oniceconnectionstatechange = () => {
-        console.log(`ICE connection state with ${peerId}:`, pc.iceConnectionState)
-        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-          // If connection fails, try reconnecting
-          console.log('Connection failed, attempting to reconnect...')
-          if (initiator) {
-            pc.restartIce()
-            createAndSendOffer(pc, peerId)
-          }
-        }
-      }
-
-      pc.ontrack = (event) => {
-        console.log('Received remote track from:', peerId, event.streams[0].getTracks())
-        const [remoteStream] = event.streams
-        
-        setRemoteStreams(prev => ({
-          ...prev,
-          [peerId]: remoteStream
-        }))
-      }
-
-      if (initiator) {
-        await createAndSendOffer(pc, peerId)
-      }
-
-      return pc
-    } catch (error) {
-      console.error('Error creating peer connection:', error)
-      throw error
-    }
-  }
-
-  const createAndSendOffer = async (pc, peerId) => {
-    try {
-      const offer = await pc.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: true,
-        iceRestart: true
-      })
-      await pc.setLocalDescription(offer)
-      
-      const meetingsRef = collection(db, 'meetings')
-      const meetingQuery = query(meetingsRef, where('meetingId', '==', meetingId))
-      const querySnapshot = await getDocs(meetingQuery)
-      
-      if (!querySnapshot.empty) {
-        const meetingDocId = querySnapshot.docs[0].id
-        const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`)
-        await addDoc(rtcRef, {
-          type: 'offer',
-          offer: {
-            type: offer.type,
-            sdp: offer.sdp
-          },
-          senderId: userId,
-          receiverId: peerId,
-          timestamp: new Date().toISOString()
-        })
-      }
-    } catch (error) {
-      console.error('Error creating and sending offer:', error)
-    }
-  }
+  }, [
+    meetingId,
+    userId,
+    userName,
+    requestMediaPermissions,
+    cleanup,
+    onMeetingEnd,
+  ]);
 
   const toggleMute = async () => {
     if (localStream) {
       try {
         const audioTracks = localStream.getAudioTracks();
-        
         if (audioTracks.length === 0) {
-          // No audio track exists, try to add one
-          try {
-            const newStream = await requestMediaPermissions(false, true);
-            const newAudioTrack = newStream.getAudioTracks()[0];
-            if (newAudioTrack) {
-              localStream.addTrack(newAudioTrack);
-              setIsMuted(false);
-            }
-          } catch (error) {
-            console.error('Failed to add audio track:', error);
-            alert('Unable to enable microphone. Please check your permissions.');
-            return;
+          // Try to add an audio track if none exists.
+          const newStream = await requestMediaPermissions(false, true);
+          const newAudioTrack = newStream.getAudioTracks()[0];
+          if (newAudioTrack) {
+            localStream.addTrack(newAudioTrack);
+            setIsMuted(false);
           }
         } else {
-          // Toggle existing audio tracks
-          audioTracks.forEach(track => {
+          audioTracks.forEach((track) => {
             track.enabled = !track.enabled;
           });
           setIsMuted(!isMuted);
         }
-
-        // Update Firebase status
-        const meetingsRef = collection(db, 'meetings');
-        const meetingQuery = query(meetingsRef, where('meetingId', '==', meetingId));
-        const querySnapshot = await getDocs(meetingQuery);
-        
-        if (!querySnapshot.empty) {
-          const meetingDocId = querySnapshot.docs[0].id;
-          // Get participants collection
-          const participantsRef = collection(db, `meetings/${meetingDocId}/participants`);
-          // Query for this user's participant document
-          const participantQuery = query(participantsRef, where('userId', '==', userId));
+        // Update Firestore participant document.
+        const meetingsRef = collection(db, "meetings");
+        const meetingQuery = query(
+          meetingsRef,
+          where("meetingId", "==", meetingId)
+        );
+        const meetingSnapshot = await getDocs(meetingQuery);
+        if (!meetingSnapshot.empty) {
+          const meetingDocId = meetingSnapshot.docs[0].id;
+          const participantsRef = collection(
+            db,
+            `meetings/${meetingDocId}/participants`
+          );
+          const participantQuery = query(
+            participantsRef,
+            where("userId", "==", userId)
+          );
           const participantSnapshot = await getDocs(participantQuery);
-          
           if (!participantSnapshot.empty) {
-            // Update the existing document
             await updateDoc(participantSnapshot.docs[0].ref, {
               isMuted: !isMuted,
-              lastUpdated: new Date().toISOString()
+              lastUpdated: new Date().toISOString(),
             });
           }
         }
       } catch (error) {
-        console.error('Error toggling mute:', error);
-        alert('Failed to toggle audio. Please check your microphone permissions.');
+        console.error("Error toggling mute:", error);
+        alert(
+          "Failed to toggle audio. Please check your microphone permissions."
+        );
       }
     }
   };
@@ -450,131 +491,119 @@ export default function VideoCalling({ meetingId, userId, userName, onMeetingEnd
   const toggleVideo = async () => {
     try {
       if (!localStream) {
-        // Try to get video access if no stream exists
+        // Request a new video stream if needed.
         const newStream = await requestMediaPermissions(true, false);
         setLocalStream(newStream);
         setIsVideoOff(false);
       } else {
         const videoTracks = localStream.getVideoTracks();
-        
         if (videoTracks.length === 0 && !isVideoOff) {
-          // No video track exists and video is supposed to be on, try to add one
-          try {
-            const newStream = await requestMediaPermissions(true, false);
-            const newVideoTrack = newStream.getVideoTracks()[0];
-            if (newVideoTrack) {
-              localStream.addTrack(newVideoTrack);
-              setIsVideoOff(false);
-            }
-          } catch (error) {
-            console.error('Failed to add video track:', error);
-            alert('Unable to enable camera. Please check your permissions.');
-            return;
+          // Try to add a video track.
+          const newStream = await requestMediaPermissions(true, false);
+          const newVideoTrack = newStream.getVideoTracks()[0];
+          if (newVideoTrack) {
+            localStream.addTrack(newVideoTrack);
+            setIsVideoOff(false);
           }
         } else {
-          // Toggle existing video tracks
-          videoTracks.forEach(track => {
+          videoTracks.forEach((track) => {
             track.enabled = !track.enabled;
           });
           setIsVideoOff(!isVideoOff);
         }
-
-        // Update Firebase status
-        const meetingsRef = collection(db, 'meetings');
-        const meetingQuery = query(meetingsRef, where('meetingId', '==', meetingId));
-        const querySnapshot = await getDocs(meetingQuery);
-        
-        if (!querySnapshot.empty) {
-          const meetingDocId = querySnapshot.docs[0].id;
-          const participantsRef = collection(db, `meetings/${meetingDocId}/participants`);
-          const participantQuery = query(participantsRef, where('userId', '==', userId));
+        // Update Firestore participant document.
+        const meetingsRef = collection(db, "meetings");
+        const meetingQuery = query(
+          meetingsRef,
+          where("meetingId", "==", meetingId)
+        );
+        const meetingSnapshot = await getDocs(meetingQuery);
+        if (!meetingSnapshot.empty) {
+          const meetingDocId = meetingSnapshot.docs[0].id;
+          const participantsRef = collection(
+            db,
+            `meetings/${meetingDocId}/participants`
+          );
+          const participantQuery = query(
+            participantsRef,
+            where("userId", "==", userId)
+          );
           const participantSnapshot = await getDocs(participantQuery);
-          
           if (!participantSnapshot.empty) {
             await updateDoc(participantSnapshot.docs[0].ref, {
               videoOn: !isVideoOff,
-              lastUpdated: new Date().toISOString()
+              lastUpdated: new Date().toISOString(),
             });
           }
         }
       }
     } catch (error) {
-      console.error('Error toggling video:', error);
-      alert('Failed to toggle video. Please check your camera permissions.');
+      console.error("Error toggling video:", error);
+      alert("Failed to toggle video. Please check your camera permissions.");
     }
   };
 
   const endCall = async () => {
     try {
-      // Calculate duration
-      const duration = Math.floor((Date.now() - startTime.current) / 1000)
-      
-      // Get meeting document ID first
-      const meetingsRef = collection(db, 'meetings')
-      const meetingQuery = query(meetingsRef, where('meetingId', '==', meetingId))
-      const querySnapshot = await getDocs(meetingQuery)
-      
-      if (!querySnapshot.empty) {
-        const meetingDocId = querySnapshot.docs[0].id
-
-        // Save meeting history
-        await saveMeetingHistory(userId, meetingId, duration)
-        
-        // If host, end meeting for all
+      const duration = Math.floor((Date.now() - startTime.current) / 1000);
+      const meetingsRef = collection(db, "meetings");
+      const meetingQuery = query(
+        meetingsRef,
+        where("meetingId", "==", meetingId)
+      );
+      const meetingSnapshot = await getDocs(meetingQuery);
+      if (!meetingSnapshot.empty) {
+        const meetingDocId = meetingSnapshot.docs[0].id;
+        // Save meeting history.
+        await saveMeetingHistory(userId, meetingId, duration);
         if (isHost) {
-          const meetingRef = doc(db, 'meetings', meetingDocId)
-          await updateDoc(meetingRef, { 
-            status: 'ended',
-            endedAt: new Date().toISOString()
-          })
+          const meetingRef = doc(db, "meetings", meetingDocId);
+          await updateDoc(meetingRef, {
+            status: "ended",
+            endedAt: new Date().toISOString(),
+          });
         }
-
-        // Get participants collection
-        const participantsRef = collection(db, `meetings/${meetingDocId}/participants`)
-        // Query for this user's participant document
-        const participantQuery = query(participantsRef, where('userId', '==', userId))
-        const participantSnapshot = await getDocs(participantQuery)
-        
+        const participantsRef = collection(
+          db,
+          `meetings/${meetingDocId}/participants`
+        );
+        const participantQuery = query(
+          participantsRef,
+          where("userId", "==", userId)
+        );
+        const participantSnapshot = await getDocs(participantQuery);
         if (!participantSnapshot.empty) {
-          // Delete the participant document
-          await deleteDoc(participantSnapshot.docs[0].ref)
+          await deleteDoc(participantSnapshot.docs[0].ref);
         }
       }
-      
-      // Cleanup
+      // Cleanup local stream and peer connections.
       if (localStream) {
-        localStream.getTracks().forEach(track => track.stop())
+        localStream.getTracks().forEach((track) => track.stop());
       }
-      Object.values(peerConnections.current).forEach(pc => pc.close())
-      
-      // Call the onMeetingEnd callback if provided
-      if (typeof onMeetingEnd === 'function') {
-        onMeetingEnd()
-      }
+      Object.values(peerConnections.current).forEach((pc) => pc.close());
+      if (typeof onMeetingEnd === "function") onMeetingEnd();
     } catch (error) {
-      console.error('Error ending call:', error)
-      // Still try to navigate away even if there's an error
-      if (typeof onMeetingEnd === 'function') {
-        onMeetingEnd()
-      }
+      console.error("Error ending call:", error);
+      if (typeof onMeetingEnd === "function") onMeetingEnd();
     }
-  }
+  };
 
   const copyMeetingId = async () => {
     try {
-      await navigator.clipboard.writeText(meetingId)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      await navigator.clipboard.writeText(meetingId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      console.error('Failed to copy:', err)
+      console.error("Failed to copy:", err);
     }
-  }
+  };
 
-  const totalPages = Math.ceil(participants.length / PARTICIPANTS_PER_PAGE)
+  // Pagination (if you have many participants)
+  const totalPages = Math.ceil(participants.length / PARTICIPANTS_PER_PAGE);
   const paginatedParticipants = participants.slice(
     (currentPage - 1) * PARTICIPANTS_PER_PAGE,
     currentPage * PARTICIPANTS_PER_PAGE
-  )
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -613,14 +642,16 @@ export default function VideoCalling({ meetingId, userId, userName, onMeetingEnd
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
           {/* Local participant */}
           <ParticipantTile
-            participant={participants.find(p => p.userId === userId) || { userName }}
+            participant={
+              participants.find((p) => p.userId === userId) || { userName }
+            }
             stream={localStream}
             isLocal={true}
             isVideoOff={isVideoOff}
           />
           {/* Remote participants */}
-          {participants
-            .filter(p => p.userId !== userId)
+          {paginatedParticipants
+            .filter((p) => p.userId !== userId)
             .map((participant) => (
               <ParticipantTile
                 key={participant.userId}
@@ -649,7 +680,26 @@ export default function VideoCalling({ meetingId, userId, userName, onMeetingEnd
           {isHost ? "End Meeting" : "Leave Meeting"}
         </Button>
       </div>
+      {/* (Optional) Pagination controls */}
+      {totalPages > 1 && (
+        <div className="flex justify-center items-center p-4 space-x-2">
+          <Button
+            onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+          >
+            <ChevronLeftIcon className="h-4 w-4" />
+          </Button>
+          <span>
+            {currentPage} / {totalPages}
+          </span>
+          <Button
+            onClick={() =>
+              setCurrentPage((prev) => Math.min(prev + 1, totalPages))
+            }
+          >
+            <ChevronRightIcon className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
     </div>
-  )
+  );
 }
-
