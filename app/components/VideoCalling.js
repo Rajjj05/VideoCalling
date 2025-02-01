@@ -153,12 +153,15 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
         
         if (querySnapshot.empty) {
           console.error('Meeting not found')
+          setMediaError('Meeting not found')
           return
         }
 
         const meetingDoc = querySnapshot.docs[0]
         const meetingData = meetingDoc.data()
         const meetingDocId = meetingDoc.id
+
+        // Check if the user is the host by comparing with the original meeting creator
         const isUserHost = meetingData.hostId === userId
         setIsHost(isUserHost)
 
@@ -169,8 +172,8 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
           setIsMuted(false)
           setIsVideoOff(false)
 
-          // Add local participant
-          setParticipants([{
+          // Add local participant with correct role
+          const localParticipant = {
             id: `local-${userId}`,
             userId: userId,
             stream,
@@ -178,24 +181,27 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
             isMuted: false,
             videoOn: true,
             isHost: isUserHost
-          }])
+          }
+          setParticipants([localParticipant])
 
-          // Create participant document
+          // Create participant document with correct role
           const participantsRef = collection(db, `meetings/${meetingDocId}/participants`)
           const participantDoc = await addDoc(participantsRef, {
             userId: userId,
-            displayName: isUserHost ? 'Host' : `Participant ${Date.now()}`,
+            displayName: isUserHost ? 'Host' : `Participant ${Date.now().toString().slice(-4)}`,
             joinedAt: new Date().toISOString(),
             isMuted: false,
             videoOn: true,
-            isHost: isUserHost
+            isHost: isUserHost,
+            role: isUserHost ? 'host' : 'participant'
           })
 
           // Set up signaling
           const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`)
           
           // Listen for existing participants
-          const existingParticipants = await getDocs(query(participantsRef, where('userId', '!=', userId)))
+          const existingParticipantsQuery = query(participantsRef, where('userId', '!=', userId))
+          const existingParticipants = await getDocs(existingParticipantsQuery)
           
           // Create peer connections for existing participants
           for (const participantDoc of existingParticipants.docs) {
@@ -239,10 +245,12 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                     try {
                       let pc = peerConnections.current[peerId]
                       if (!pc) {
-                        const participantDoc = existingParticipants.docs.find(
-                          doc => doc.data().userId === peerId
-                        )
-                        pc = await createPeerConnection(peerId, stream, participantDoc?.data())
+                        // Get participant info from Firestore
+                        const participantQuery = query(participantsRef, where('userId', '==', peerId))
+                        const participantSnapshot = await getDocs(participantQuery)
+                        const participantData = participantSnapshot.docs[0]?.data()
+                        
+                        pc = await createPeerConnection(peerId, stream, participantData)
                       }
 
                       await pc.setRemoteDescription(new RTCSessionDescription(data.offer))
@@ -286,9 +294,9 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
             })
           })
 
-          // Listen for participant updates
+          // Listen for participant updates with role information
           const participantUnsubscribe = onSnapshot(participantsRef, (snapshot) => {
-            snapshot.docChanges().forEach(change => {
+            snapshot.docChanges().forEach(async change => {
               const participantData = change.doc.data()
               if (change.type === 'modified' && participantData.userId !== userId) {
                 setParticipants(prev => {
@@ -297,7 +305,9 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                       return {
                         ...p,
                         isMuted: participantData.isMuted,
-                        videoOn: participantData.videoOn
+                        videoOn: participantData.videoOn,
+                        name: participantData.displayName,
+                        isHost: participantData.isHost
                       }
                     }
                     return p
