@@ -30,6 +30,17 @@ const ICE_SERVERS = {
         'stun:stun2.l.google.com:19302',
       ],
     },
+    // Add TURN server for reliable connectivity
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    }
   ],
 }
 
@@ -108,10 +119,13 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
 
       pc.oniceconnectionstatechange = () => {
         console.log(`ICE connection state with ${peerId}:`, pc.iceConnectionState)
-        if (pc.iceConnectionState === 'failed') {
+        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
           // If connection fails, try reconnecting
           console.log('Connection failed, attempting to reconnect...')
-          pc.restartIce()
+          if (initiator) {
+            pc.restartIce()
+            createAndSendOffer(pc, peerId)
+          }
         }
       }
 
@@ -121,7 +135,7 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
         
         setParticipants(prev => {
           const filtered = prev.filter(p => p.userId !== peerId)
-          return [...filtered, {
+          const newParticipant = {
             id: `remote-${peerId}`,
             userId: peerId,
             stream: remoteStream,
@@ -129,45 +143,52 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
             isMuted: participantData?.isMuted || false,
             videoOn: participantData?.videoOn || true,
             isHost: participantData?.isHost || false
-          }]
+          }
+          console.log('Adding participant:', newParticipant)
+          return [...filtered, newParticipant]
         })
       }
 
       if (initiator) {
-        try {
-          const offer = await pc.createOffer({
-            offerToReceiveAudio: true,
-            offerToReceiveVideo: true
-          })
-          await pc.setLocalDescription(offer)
-          
-          const meetingsRef = collection(db, 'meetings')
-          const meetingQuery = query(meetingsRef, where('meetingId', '==', meetingId))
-          const querySnapshot = await getDocs(meetingQuery)
-          
-          if (!querySnapshot.empty) {
-            const meetingDocId = querySnapshot.docs[0].id
-            const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`)
-            await addDoc(rtcRef, {
-              type: 'offer',
-              offer: {
-                type: offer.type,
-                sdp: offer.sdp
-              },
-              senderId: userId,
-              receiverId: peerId,
-              timestamp: new Date().toISOString()
-            })
-          }
-        } catch (error) {
-          console.error('Error creating offer:', error)
-        }
+        await createAndSendOffer(pc, peerId)
       }
 
       return pc
     } catch (error) {
       console.error('Error creating peer connection:', error)
       throw error
+    }
+  }
+
+  const createAndSendOffer = async (pc, peerId) => {
+    try {
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true,
+        iceRestart: true
+      })
+      await pc.setLocalDescription(offer)
+      
+      const meetingsRef = collection(db, 'meetings')
+      const meetingQuery = query(meetingsRef, where('meetingId', '==', meetingId))
+      const querySnapshot = await getDocs(meetingQuery)
+      
+      if (!querySnapshot.empty) {
+        const meetingDocId = querySnapshot.docs[0].id
+        const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`)
+        await addDoc(rtcRef, {
+          type: 'offer',
+          offer: {
+            type: offer.type,
+            sdp: offer.sdp
+          },
+          senderId: userId,
+          receiverId: peerId,
+          timestamp: new Date().toISOString()
+        })
+      }
+    } catch (error) {
+      console.error('Error creating and sending offer:', error)
     }
   }
 
@@ -189,13 +210,14 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
         const meetingData = meetingDoc.data()
         const meetingDocId = meetingDoc.id
 
-        // Check if the user is the host
+        // Determine if user is host
         const isUserHost = meetingData.hostId === userId
         setIsHost(isUserHost)
 
         try {
           // Request initial media permissions
           const stream = await requestMediaPermissions()
+          console.log('Got media stream:', stream.getTracks())
           setLocalStream(stream)
           setIsMuted(false)
           setIsVideoOff(false)
@@ -227,6 +249,21 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
           // Set up signaling
           const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`)
 
+          // If not host, create connections to existing participants
+          if (!isUserHost) {
+            const existingParticipants = await getDocs(query(participantsRef, 
+              where('userId', '!=', userId),
+              where('role', '==', 'host')
+            ))
+            
+            for (const doc of existingParticipants.docs) {
+              const hostData = doc.data()
+              if (!peerConnections.current[hostData.userId]) {
+                await createPeerConnection(hostData.userId, stream, hostData, true)
+              }
+            }
+          }
+
           // Listen for participants
           const participantUnsubscribe = onSnapshot(participantsRef, async (snapshot) => {
             const changes = snapshot.docChanges()
@@ -240,8 +277,7 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
 
               if (change.type === 'added') {
                 console.log('New participant:', participantData)
-                // Create a peer connection as initiator
-                if (!peerConnections.current[peerId]) {
+                if (isUserHost && !peerConnections.current[peerId]) {
                   await createPeerConnection(peerId, stream, participantData, true)
                 }
               } else if (change.type === 'modified') {
@@ -250,7 +286,8 @@ export function VideoCalling({ meetingId, userId, onMeetingEnd }) {
                     ...p,
                     isMuted: participantData.isMuted,
                     videoOn: participantData.videoOn,
-                    name: participantData.displayName
+                    name: participantData.displayName,
+                    isHost: participantData.isHost
                   } : p
                 ))
               } else if (change.type === 'removed') {

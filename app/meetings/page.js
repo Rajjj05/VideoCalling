@@ -19,13 +19,13 @@ export default function Meetings() {
   const createMeeting = async () => {
     try {
       const newMeetingId = uuidv4()
-      const meetingRef = await addDoc(collection(db, 'meetings'), {
+      // Create the meeting document with host information
+      await addDoc(collection(db, 'meetings'), {
         meetingId: newMeetingId,
         hostId: user.uid,
         hostName: user.displayName,
         createdAt: new Date().toISOString(),
-        status: 'active',
-        participants: []
+        status: 'active'
       })
 
       router.push(`/meeting/${newMeetingId}`)
@@ -53,6 +53,12 @@ export default function Meetings() {
 
       const meetingDoc = querySnapshot.docs[0]
       const meetingData = meetingDoc.data()
+
+      // Check if the user is trying to join their own meeting
+      if (meetingData.hostId === user.uid) {
+        setError('You are the host of this meeting. Please use the original meeting link.')
+        return
+      }
 
       if (meetingData.status !== 'active') {
         setError('This meeting has ended')
