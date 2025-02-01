@@ -50,6 +50,47 @@ const ICE_SERVERS = {
   iceCandidatePoolSize: 10,
 }
 
+function ParticipantTile({ participant, stream, isLocal = false }) {
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  return (
+    <Card className="relative aspect-video overflow-hidden">
+      <CardContent className="p-0 h-full">
+        {(!isVideoOff || !isLocal) && (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted={isLocal}
+            className="w-full h-full object-cover"
+          />
+        )}
+        {(isVideoOff || !stream) && (
+          <div className="flex items-center justify-center w-full h-full bg-secondary">
+            <span className="text-4xl">{participant.userName?.[0]?.toUpperCase() || 'U'}</span>
+          </div>
+        )}
+        <div className="absolute bottom-2 left-2 right-2 flex justify-between items-center">
+          <Badge variant="secondary" className="text-xs">
+            {isLocal ? "You" : participant.userName} {participant.isHost && "(Host)"}
+          </Badge>
+          {participant.isMuted && (
+            <Badge variant="destructive" className="text-xs">
+              Muted
+            </Badge>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function VideoCalling({ meetingId, userId, userName, onMeetingEnd }) {
   const [participants, setParticipants] = useState([])
   const [currentPage, setCurrentPage] = useState(1)
@@ -142,7 +183,6 @@ export default function VideoCalling({ meetingId, userId, userName, onMeetingEnd
 
     const setupMeeting = async () => {
       try {
-        setIsInitializing(true);
         const meetingsRef = collection(db, 'meetings');
         const meetingQuery = query(meetingsRef, where('meetingId', '==', meetingId));
         const querySnapshot = await getDocs(meetingQuery);
@@ -155,59 +195,87 @@ export default function VideoCalling({ meetingId, userId, userName, onMeetingEnd
         const meetingData = meetingDoc.data();
         const meetingDocId = meetingDoc.id;
 
-        // Check if meeting is active
         if (meetingData.status === 'ended') {
           throw new Error('This meeting has ended');
         }
 
-        // Set host status
         const isUserHost = meetingData.hostId === userId;
         setIsHost(isUserHost);
 
         // Initialize media stream
         const stream = await requestMediaPermissions();
-        if (cleanupRef.current) return; // Check if cleanup occurred during initialization
+        if (cleanupRef.current) return;
         
         setLocalStream(stream);
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-        }
 
-        // Setup participants and RTC listeners
-        const setupListeners = async () => {
-          const participantsRef = collection(db, `meetings/${meetingDocId}/participants`);
-          const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`);
-
-          // Add current user to participants
-          await addDoc(participantsRef, {
-            userId,
-            userName,
-            joinedAt: serverTimestamp(),
-            isHost: isUserHost,
-            isMuted: false,
-            videoOn: true
-          });
-
-          // Listen for participants
-          unsubscribeParticipants = onSnapshot(participantsRef, (snapshot) => {
-            if (cleanupRef.current) return;
-            handleParticipantsUpdate(snapshot);
-          });
-
-          // Listen for RTC signaling
-          unsubscribeRTC = onSnapshot(rtcRef, (snapshot) => {
-            if (cleanupRef.current) return;
-            handleRTCSignaling(snapshot);
-          });
+        // Add local participant
+        const localParticipant = {
+          userId,
+          userName,
+          isHost: isUserHost,
+          isMuted: false,
+          isVideoOff: false
         };
+        setParticipants(prev => [localParticipant]);
 
-        await setupListeners();
-        setIsInitializing(false);
+        const participantsRef = collection(db, `meetings/${meetingDocId}/participants`);
+        const rtcRef = collection(db, `meetings/${meetingDocId}/rtc`);
+
+        // Add to participants collection
+        await addDoc(participantsRef, {
+          userId,
+          userName,
+          joinedAt: serverTimestamp(),
+          isHost: isUserHost,
+          isMuted: false,
+          videoOn: true
+        });
+
+        // Listen for participants
+        unsubscribeParticipants = onSnapshot(participantsRef, (snapshot) => {
+          if (cleanupRef.current) return;
+          
+          const currentParticipants = [];
+          snapshot.forEach((doc) => {
+            const participantData = doc.data();
+            if (participantData.userId !== userId) {
+              currentParticipants.push({
+                ...participantData,
+                docId: doc.id
+              });
+            }
+          });
+          
+          setParticipants(prev => {
+            const localParticipant = prev.find(p => p.userId === userId) || {
+              userId,
+              userName,
+              isHost: isUserHost,
+              isMuted: false,
+              isVideoOff: false
+            };
+            return [localParticipant, ...currentParticipants];
+          });
+        });
+
+        // Listen for RTC signaling
+        unsubscribeRTC = onSnapshot(rtcRef, async (snapshot) => {
+          if (cleanupRef.current) return;
+          const changes = snapshot.docChanges();
+          
+          for (const change of changes) {
+            if (change.type === 'added') {
+              const data = change.doc.data();
+              if (data.receiverId === userId) {
+                handleRTCMessage(data, participantsRef);
+              }
+            }
+          }
+        });
 
       } catch (error) {
         console.error('Error setting up meeting:', error);
         setMediaError(error.message);
-        setIsInitializing(false);
         if (typeof onMeetingEnd === 'function') {
           onMeetingEnd();
         }
@@ -513,12 +581,9 @@ export default function VideoCalling({ meetingId, userId, userName, onMeetingEnd
 
   return (
     <div className="flex flex-col h-full">
-      {(mediaError || isInitializing) && (
-        <div className={`p-4 ${mediaError ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'} text-center`}>
-          {mediaError ? 
-            `${mediaError}. Please check your device permissions.` : 
-            'Initializing meeting... Please wait.'
-          }
+      {mediaError && (
+        <div className="p-4 bg-red-100 text-red-700 text-center">
+          {mediaError}. Please check your device permissions.
         </div>
       )}
       {isHost && (
@@ -548,37 +613,25 @@ export default function VideoCalling({ meetingId, userId, userName, onMeetingEnd
         </div>
       )}
       <div className="flex-grow relative">
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2 p-2">
-          {paginatedParticipants.map((participant) => (
-            <ParticipantTile 
-              key={participant.id} 
-              participant={participant}
-            />
-          ))}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
+          {/* Local participant */}
+          <ParticipantTile
+            participant={participants.find(p => p.userId === userId) || { userName }}
+            stream={localStream}
+            isLocal={true}
+          />
+          {/* Remote participants */}
+          {participants
+            .filter(p => p.userId !== userId)
+            .map((participant) => (
+              <ParticipantTile
+                key={participant.userId}
+                participant={participant}
+                stream={remoteStreams[participant.userId]}
+                isLocal={false}
+              />
+            ))}
         </div>
-        {totalPages > 1 && (
-          <Card className="absolute bottom-4 left-1/2 transform -translate-x-1/2">
-            <CardContent className="flex items-center space-x-2 p-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                disabled={currentPage === 1}>
-                <ChevronLeftIcon className="h-4 w-4" />
-              </Button>
-              <span className="text-sm">
-                {currentPage} / {totalPages}
-              </span>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                disabled={currentPage === totalPages}>
-                <ChevronRightIcon className="h-4 w-4" />
-              </Button>
-            </CardContent>
-          </Card>
-        )}
       </div>
       <div className="p-4 flex justify-center space-x-4">
         <Button
@@ -598,46 +651,6 @@ export default function VideoCalling({ meetingId, userId, userName, onMeetingEnd
         </Button>
       </div>
     </div>
-  )
-}
-
-function ParticipantTile({ participant }) {
-  const videoRef = useRef()
-
-  useEffect(() => {
-    if (participant.stream && videoRef.current) {
-      videoRef.current.srcObject = participant.stream
-    }
-  }, [participant.stream])
-
-  return (
-    <Card className="relative aspect-video overflow-hidden">
-      <CardContent className="p-0">
-        {participant.videoOn ? (
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted={participant.id.startsWith('local-')}
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <div className="flex items-center justify-center w-full h-full bg-secondary">
-            <span className="text-4xl">{participant.name[0].toUpperCase()}</span>
-          </div>
-        )}
-        <div className="absolute bottom-2 left-2 right-2 flex justify-between items-center">
-          <Badge variant="secondary" className="text-xs">
-            {participant.name} {participant.isHost && "(Host)"}
-          </Badge>
-          {participant.isMuted && (
-            <Badge variant="destructive" className="text-xs">
-              Muted
-            </Badge>
-          )}
-        </div>
-      </CardContent>
-    </Card>
   )
 }
 
