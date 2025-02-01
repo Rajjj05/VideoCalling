@@ -50,7 +50,7 @@ const ICE_SERVERS = {
   iceCandidatePoolSize: 10,
 }
 
-function ParticipantTile({ participant, stream, isLocal = false }) {
+function ParticipantTile({ participant, stream, isLocal = false, isVideoOff = false }) {
   const videoRef = useRef(null);
 
   useEffect(() => {
@@ -62,7 +62,7 @@ function ParticipantTile({ participant, stream, isLocal = false }) {
   return (
     <Card className="relative aspect-video overflow-hidden">
       <CardContent className="p-0 h-full">
-        {(!isVideoOff || !isLocal) && (
+        {(!isVideoOff || !isLocal) && stream && (
           <video
             ref={videoRef}
             autoPlay
@@ -478,27 +478,24 @@ export default function VideoCalling({ meetingId, userId, userName, onMeetingEnd
           });
           setIsVideoOff(!isVideoOff);
         }
-      }
 
-      // Update Firebase status
-      const meetingsRef = collection(db, 'meetings');
-      const meetingQuery = query(meetingsRef, where('meetingId', '==', meetingId));
-      const querySnapshot = await getDocs(meetingQuery);
-      
-      if (!querySnapshot.empty) {
-        const meetingDocId = querySnapshot.docs[0].id;
-        // Get participants collection
-        const participantsRef = collection(db, `meetings/${meetingDocId}/participants`);
-        // Query for this user's participant document
-        const participantQuery = query(participantsRef, where('userId', '==', userId));
-        const participantSnapshot = await getDocs(participantQuery);
+        // Update Firebase status
+        const meetingsRef = collection(db, 'meetings');
+        const meetingQuery = query(meetingsRef, where('meetingId', '==', meetingId));
+        const querySnapshot = await getDocs(meetingQuery);
         
-        if (!participantSnapshot.empty) {
-          // Update the existing document
-          await updateDoc(participantSnapshot.docs[0].ref, {
-            videoOn: !isVideoOff,
-            lastUpdated: new Date().toISOString()
-          });
+        if (!querySnapshot.empty) {
+          const meetingDocId = querySnapshot.docs[0].id;
+          const participantsRef = collection(db, `meetings/${meetingDocId}/participants`);
+          const participantQuery = query(participantsRef, where('userId', '==', userId));
+          const participantSnapshot = await getDocs(participantQuery);
+          
+          if (!participantSnapshot.empty) {
+            await updateDoc(participantSnapshot.docs[0].ref, {
+              videoOn: !isVideoOff,
+              lastUpdated: new Date().toISOString()
+            });
+          }
         }
       }
     } catch (error) {
@@ -619,6 +616,7 @@ export default function VideoCalling({ meetingId, userId, userName, onMeetingEnd
             participant={participants.find(p => p.userId === userId) || { userName }}
             stream={localStream}
             isLocal={true}
+            isVideoOff={isVideoOff}
           />
           {/* Remote participants */}
           {participants
@@ -629,6 +627,7 @@ export default function VideoCalling({ meetingId, userId, userName, onMeetingEnd
                 participant={participant}
                 stream={remoteStreams[participant.userId]}
                 isLocal={false}
+                isVideoOff={participant.videoOn === false}
               />
             ))}
         </div>
