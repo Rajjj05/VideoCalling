@@ -25,12 +25,7 @@ export default function Meetings() {
         hostName: user.displayName,
         createdAt: new Date().toISOString(),
         status: 'active',
-        participants: [{
-          uid: user.uid,
-          displayName: user.displayName,
-          role: 'host',
-          joinedAt: new Date().toISOString()
-        }]
+        participants: []
       })
 
       router.push(`/meeting/${newMeetingId}`)
@@ -63,16 +58,6 @@ export default function Meetings() {
         setError('This meeting has ended')
         return
       }
-
-      // Add participant to the meeting
-      await updateDoc(doc(db, 'meetings', meetingDoc.id), {
-        participants: [...meetingData.participants, {
-          uid: user.uid,
-          displayName: user.displayName,
-          role: 'participant',
-          joinedAt: new Date().toISOString()
-        }]
-      })
 
       router.push(`/meeting/${meetingId}`)
     } catch (error) {
