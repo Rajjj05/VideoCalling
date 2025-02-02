@@ -28,20 +28,6 @@ export default function MeetingPage() {
   const [isMeetingEnded, setIsMeetingEnded] = useState(false);
 
   // Initialize local video stream
-  const initializeStream = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      });
-      setLocalStream(stream);
-      return stream;
-    } catch (err) {
-      console.error("Error accessing media devices:", err);
-      setError("Failed to access camera or microphone");
-      return null;
-    }
-  };
 
   const setupCall = async () => {
     try {
