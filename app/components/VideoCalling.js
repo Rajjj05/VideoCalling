@@ -9,6 +9,8 @@ import {
   getDocs,
   updateDoc,
   doc,
+  addDoc,
+  onSnapshot,
 } from "firebase/firestore";
 import { useContext } from "react";
 import { MeetingContext } from "../contexts/MeetingContext";
@@ -26,7 +28,7 @@ export default function VideoCalling({
   userId,
   userName,
   onMeetingEnd,
-  participants,
+  participants = [],
 }) {
   const { resetActiveMeetingContext } = useContext(MeetingContext);
   const [error, setError] = useState(null);

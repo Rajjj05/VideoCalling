@@ -4,7 +4,9 @@ import Link from "next/link";
 import { useAuth } from "../contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "next-themes";
-import { MoonIcon, SunIcon, MenuIcon } from "@radix-ui/react-icons";
+import { MoonIcon, SunIcon } from "@radix-ui/react-icons"; // Keep these
+import { Menu } from "lucide-react"; // Use Lucide for the menu icon
+
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -53,7 +55,7 @@ export function Header() {
           <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
             <SheetTrigger asChild>
               <Button variant="ghost" size="icon">
-                <MenuIcon className="h-5 w-5" />
+                <Menu className="h-5 w-5" />
                 <span className="sr-only">Toggle menu</span>
               </Button>
             </SheetTrigger>
@@ -142,7 +144,7 @@ export function Header() {
                 </Avatar>
               </DropdownMenuTrigger>
               <DropdownMenuContent>
-                <DropdownMenuItem onSelect={logout}>Logout</DropdownMenuItem>
+                <DropdownMenuItem onClick={logout}>Logout</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           ) : (
