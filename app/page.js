@@ -1,10 +1,14 @@
-import Link from "next/link"
-import { Button } from "../components/ui/button"
-import { ComponentShowcase } from "./components/ComponentShowcase"
+import Link from "next/link";
+import { Button } from "../components/ui/button";
+import { ComponentShowcase } from "./components/ComponentShowcase";
+export const metadata = {
+  title: "VideoConf App",
+  description: "Modern video conferencing web application",
+};
 
 export default function Home() {
   return (
-    (<div className="flex flex-col items-center justify-center min-h-screen py-2">
+    <div className="flex flex-col items-center justify-center min-h-screen py-2">
       <h1 className="text-4xl font-bold mb-8">Welcome to VideoConf</h1>
       <Button asChild>
         <Link href="/meetings">Start Meeting</Link>
@@ -12,28 +16,30 @@ export default function Home() {
       <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-8">
         <FeatureCard
           title="High-Quality Video"
-          description="Experience crystal-clear video and audio in your meetings." />
+          description="Experience crystal-clear video and audio in your meetings."
+        />
         <FeatureCard
           title="Secure Meetings"
-          description="Your meetings are protected with end-to-end encryption." />
+          description="Your meetings are protected with end-to-end encryption."
+        />
         <FeatureCard
           title="Collaborative Tools"
-          description="Share screens, take notes, and chat in real-time." />
+          description="Share screens, take notes, and chat in real-time."
+        />
       </div>
       <div className="mt-16">
         <h2 className="text-2xl font-bold mb-4">Component Showcase</h2>
         <ComponentShowcase />
       </div>
-    </div>)
+    </div>
   );
 }
 
 function FeatureCard({ title, description }) {
   return (
-    (<div className="p-6 border rounded-lg">
+    <div className="p-6 border rounded-lg">
       <h3 className="text-xl font-semibold mb-2">{title}</h3>
       <p>{description}</p>
-    </div>)
+    </div>
   );
 }
-

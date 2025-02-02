@@ -1,19 +1,19 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { useParams, useRouter } from "next/navigation"
-import { useAuth } from "../../contexts/AuthContext"
-import VideoCalling from "../../components/VideoCalling"
-import { Loader2 } from "lucide-react"
-import { collection, query, where, getDocs } from "firebase/firestore"
-import { db } from "../../lib/firebase"
+import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useAuth } from "../../contexts/AuthContext";
+import VideoCalling from "../../components/VideoCalling";
+import { Loader2 } from "lucide-react";
+import { collection, query, where, getDocs } from "firebase/firestore";
+import { db } from "../../lib/firebase";
 
 export default function MeetingPage() {
-  const { id } = useParams()
-  const { user } = useAuth()
-  const router = useRouter()
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const { id } = useParams();
+  const { user } = useAuth();
+  const router = useRouter();
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -26,17 +26,17 @@ export default function MeetingPage() {
         }
 
         // Verify meeting exists and is active
-        const meetingsRef = collection(db, 'meetings');
-        const meetingQuery = query(meetingsRef, where('meetingId', '==', id));
+        const meetingsRef = collection(db, "meetings");
+        const meetingQuery = query(meetingsRef, where("meetingId", "==", id));
         const querySnapshot = await getDocs(meetingQuery);
 
         if (!querySnapshot.empty) {
           const meetingData = querySnapshot.docs[0].data();
-          if (meetingData.status === 'ended') {
-            throw new Error('This meeting has ended');
+          if (meetingData.status === "ended") {
+            throw new Error("This meeting has ended");
           }
         } else {
-          throw new Error('Meeting not found');
+          throw new Error("Meeting not found");
         }
 
         if (mounted) {
@@ -44,7 +44,7 @@ export default function MeetingPage() {
           setError(null);
         }
       } catch (err) {
-        console.error('Error checking meeting:', err);
+        console.error("Error checking meeting:", err);
         if (mounted) {
           setError(err.message);
           setIsLoading(false);
@@ -60,8 +60,8 @@ export default function MeetingPage() {
   }, [user, id]);
 
   const handleMeetingEnd = () => {
-    router.push('/meetings');
-  }
+    router.push("/meetings");
+  };
 
   if (isLoading) {
     return (
@@ -77,7 +77,7 @@ export default function MeetingPage() {
         <div className="text-center">
           <p className="text-lg mb-4">Please sign in to join the meeting.</p>
           <button
-            onClick={() => router.push('/login')}
+            onClick={() => router.push("/login")}
             className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
           >
             Sign In
@@ -93,7 +93,7 @@ export default function MeetingPage() {
         <div className="text-center">
           <p className="text-lg text-red-600 mb-4">{error}</p>
           <button
-            onClick={() => router.push('/meetings')}
+            onClick={() => router.push("/meetings")}
             className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
           >
             Back to Meetings
@@ -108,7 +108,7 @@ export default function MeetingPage() {
       <VideoCalling
         meetingId={id}
         userId={user.uid}
-        userName={user.displayName || 'Anonymous'}
+        userName={user.displayName || "Anonymous"}
         onMeetingEnd={handleMeetingEnd}
       />
     </div>

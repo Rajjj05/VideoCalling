@@ -1,76 +1,91 @@
-"use client"
+"use client";
 
-import { useState } from "react"
-import { Button } from "../../components/ui/button"
-import { Input } from "../../components/ui/input"
-import { ProtectedRoute } from "../components/ProtectedRoute"
-import { useRouter } from "next/navigation"
-import { useAuth } from "../contexts/AuthContext"
-import { db } from "../lib/firebase"
-import { collection, addDoc, doc, getDoc, getDocs, query, where, updateDoc } from "firebase/firestore"
-import { v4 as uuidv4 } from "uuid"
+import { useState, useContext } from "react";
+import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
+import { ProtectedRoute } from "../components/ProtectedRoute";
+import { useRouter } from "next/navigation";
+import { useAuth } from "../contexts/AuthContext";
+import { db } from "../lib/firebase";
+import {
+  collection,
+  addDoc,
+  updateDoc,
+  doc,
+  query,
+  where,
+  getDocs,
+} from "firebase/firestore";
+import { MeetingContext } from "../contexts/MeetingContext";
 
 export default function Meetings() {
-  const [meetingId, setMeetingId] = useState("")
-  const [error, setError] = useState("")
-  const router = useRouter()
-  const { user } = useAuth()
+  const [meetingId, setMeetingId] = useState("");
+  const [error, setError] = useState("");
+  const router = useRouter();
+  const { user } = useAuth();
+  const { setActiveMeetingContext } = useContext(MeetingContext);
 
   const createMeeting = async () => {
     try {
-      const newMeetingId = uuidv4()
-      // Create the meeting document with host information
-      await addDoc(collection(db, 'meetings'), {
-        meetingId: newMeetingId,
+      // Create the meeting document without specifying meetingId
+      const meetingRef = await addDoc(collection(db, "meetings"), {
         hostId: user.uid,
         hostName: user.displayName,
         createdAt: new Date().toISOString(),
-        status: 'active'
-      })
+        status: "active",
+      });
 
-      router.push(`/meeting/${newMeetingId}`)
+      // Now update the document to include its auto-generated ID
+      await updateDoc(meetingRef, { meetingId: meetingRef.id });
+
+      // Set the active meeting context to the document ID
+      setActiveMeetingContext(meetingRef.id);
+
+      // Navigate to the meeting page using the meeting's ID
+      router.push(`/meeting/${meetingRef.id}`);
     } catch (error) {
-      console.error('Error creating meeting:', error)
-      setError('Failed to create meeting. Please try again.')
+      console.error("Error creating meeting:", error);
+      setError("Failed to create meeting. Please try again.");
     }
-  }
+  };
 
   const joinMeeting = async () => {
     if (!meetingId.trim()) {
-      setError('Please enter a meeting ID')
-      return
+      setError("Please enter a meeting ID");
+      return;
     }
 
     try {
-      // Query the meeting by meetingId
-      const meetingsRef = collection(db, 'meetings')
-      const querySnapshot = await getDocs(query(meetingsRef, where('meetingId', '==', meetingId)))
-      
+      const meetingsRef = collection(db, "meetings");
+      const q = query(meetingsRef, where("meetingId", "==", meetingId));
+      const querySnapshot = await getDocs(q);
+
       if (querySnapshot.empty) {
-        setError('Meeting not found')
-        return
+        setError("Meeting not found");
+        return;
       }
 
-      const meetingDoc = querySnapshot.docs[0]
-      const meetingData = meetingDoc.data()
+      const meetingDoc = querySnapshot.docs[0];
+      const meetingData = meetingDoc.data();
 
-      // Check if the user is trying to join their own meeting
       if (meetingData.hostId === user.uid) {
-        setError('You are the host of this meeting. Please use the original meeting link.')
-        return
+        setError(
+          "You are the host of this meeting. Please use the original meeting link."
+        );
+        return;
       }
 
-      if (meetingData.status !== 'active') {
-        setError('This meeting has ended')
-        return
+      if (meetingData.status !== "active") {
+        setError("This meeting has ended");
+        return;
       }
 
-      router.push(`/meeting/${meetingId}`)
+      router.push(`/meeting/${meetingId}`);
     } catch (error) {
-      console.error('Error joining meeting:', error)
-      setError('Failed to join meeting. Please try again.')
+      console.error("Error joining meeting:", error);
+      setError("Failed to join meeting. Please try again.");
     }
-  }
+  };
 
   return (
     <ProtectedRoute>
@@ -109,6 +124,5 @@ export default function Meetings() {
         </div>
       </div>
     </ProtectedRoute>
-  )
+  );
 }
-
