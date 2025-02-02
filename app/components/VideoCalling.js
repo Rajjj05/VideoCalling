@@ -102,7 +102,6 @@ export default function VideoCalling({
       // When receiving a remote stream
       pc.ontrack = (event) => {
         console.log("Remote track received", event.streams[0]);
-        // Add remote video stream to the state
         setRemoteStreams((prevStreams) => [...prevStreams, event.streams[0]]);
       };
 
