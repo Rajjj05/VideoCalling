@@ -1,3 +1,4 @@
+// pages/meeting/[id]/page.js
 "use client";
 
 import { useEffect, useState } from "react";
@@ -60,6 +61,7 @@ export default function MeetingPage() {
   }, [user, id]);
 
   const handleMeetingEnd = () => {
+    // Redirect to the meetings list after ending the meeting
     router.push("/meetings");
   };
 
@@ -109,7 +111,7 @@ export default function MeetingPage() {
         meetingId={id}
         userId={user.uid}
         userName={user.displayName || "Anonymous"}
-        onMeetingEnd={handleMeetingEnd}
+        onMeetingEnd={handleMeetingEnd} // Pass the handler here
       />
     </div>
   );
