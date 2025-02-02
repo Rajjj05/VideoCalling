@@ -94,11 +94,15 @@ export default function VideoCalling({
       const pc = new RTCPeerConnection(configuration);
       pcRef.current = pc;
 
+      // Add local media tracks to the peer connection
       stream.getTracks().forEach((track) => {
         pc.addTrack(track, stream);
       });
 
+      // When receiving a remote stream
       pc.ontrack = (event) => {
+        console.log("Remote track received", event.streams[0]);
+        // Add remote video stream to the state
         setRemoteStreams((prevStreams) => [...prevStreams, event.streams[0]]);
       };
 
@@ -199,28 +203,6 @@ export default function VideoCalling({
     }
   };
 
-  // Toggle video
-  const toggleVideo = () => {
-    if (localStream) {
-      const videoTrack = localStream.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.enabled = !videoTrack.enabled;
-        setIsVideoOff(!videoTrack.enabled);
-      }
-    }
-  };
-
-  // Toggle mute
-  const toggleAudio = () => {
-    if (localStream) {
-      const audioTrack = localStream.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled;
-        setIsMuted(!audioTrack.enabled);
-      }
-    }
-  };
-
   useEffect(() => {
     if (!hasLeft) {
       setupCall();
@@ -276,22 +258,6 @@ export default function VideoCalling({
               className="p-3 bg-yellow-600 rounded-full hover:bg-opacity-80 transition"
             >
               Leave Meeting
-            </button>
-            <button
-              onClick={toggleAudio}
-              className={`p-3 rounded-full ${
-                isMuted ? "bg-red-600" : "bg-gray-700"
-              } hover:bg-opacity-80 transition`}
-            >
-              {isMuted ? "Unmute" : "Mute"}
-            </button>
-            <button
-              onClick={toggleVideo}
-              className={`p-3 rounded-full ${
-                isVideoOff ? "bg-red-600" : "bg-gray-700"
-              } hover:bg-opacity-80 transition`}
-            >
-              {isVideoOff ? "Enable Video" : "Disable Video"}
             </button>
             {isHost && (
               <button
