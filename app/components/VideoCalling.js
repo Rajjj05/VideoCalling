@@ -16,8 +16,8 @@ import { MeetingContext } from "../contexts/MeetingContext";
 import MeetingNotes from "./MeetingNotes";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import ResponsiveGrid from "./ResponsiveGrid";
 
+// STUN server configuration
 const configuration = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
 };
@@ -102,6 +102,7 @@ export default function VideoCalling({
       // When receiving a remote stream
       pc.ontrack = (event) => {
         console.log("Remote track received", event.streams[0]);
+        // Add remote video stream to the state
         setRemoteStreams((prevStreams) => [...prevStreams, event.streams[0]]);
       };
 
@@ -202,6 +203,7 @@ export default function VideoCalling({
     }
   };
 
+  // Toggle audio
   const toggleAudio = () => {
     if (localStream) {
       const audioTrack = localStream.getAudioTracks()[0];
@@ -212,6 +214,7 @@ export default function VideoCalling({
     }
   };
 
+  // Toggle video
   const toggleVideo = () => {
     if (localStream) {
       const videoTrack = localStream.getVideoTracks()[0];
@@ -250,23 +253,31 @@ export default function VideoCalling({
       )}
 
       {/* Video Grid */}
-      {!hasLeft ? (
-        <ResponsiveGrid>
-          <ParticipantTile isLocal={true} videoRef={localVideoRef} />
-          {remoteStreams.map((stream, index) => (
-            <ParticipantTile key={index} videoStream={stream} />
-          ))}
-        </ResponsiveGrid>
-      ) : (
-        <div className="flex items-center justify-center h-full">
-          <button
-            onClick={rejoinMeeting}
-            className="p-4 bg-green-600 text-white rounded-lg shadow-lg hover:bg-green-700"
-          >
-            Rejoin Meeting
-          </button>
+      <div className="flex justify-center gap-4">
+        {/* Local Video */}
+        <div className="w-1/2">
+          <video
+            ref={localVideoRef}
+            autoPlay
+            muted
+            playsInline
+            className="w-full bg-black"
+          />
         </div>
-      )}
+
+        {/* Remote Video */}
+        <div className="w-1/2">
+          {remoteStreams.map((stream, index) => (
+            <video
+              key={index}
+              autoPlay
+              playsInline
+              ref={remoteVideoRef}
+              className="w-full bg-black"
+            />
+          ))}
+        </div>
+      </div>
 
       {/* Controls */}
       <div className="p-4 bg-gray-800 flex items-center justify-center gap-4">
