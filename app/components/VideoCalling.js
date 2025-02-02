@@ -27,7 +27,7 @@ export default function VideoCalling({
 }) {
   const { resetActiveMeetingContext } = useContext(MeetingContext);
   const localVideoRef = useRef(null);
-  const remoteVideoRef = useRef(null);
+  const remoteVideoRefs = useRef([]);
   const pcRef = useRef(null);
   const [error, setError] = useState(null);
   const [isHost, setIsHost] = useState(false);
@@ -94,7 +94,11 @@ export default function VideoCalling({
 
       // When receiving a remote stream
       pc.ontrack = (event) => {
-        setRemoteStreams((prevStreams) => [...prevStreams, event.streams[0]]);
+        // Add the remote stream to the state and update the UI
+        setRemoteStreams((prevStreams) => {
+          const newStreams = [...prevStreams, event.streams[0]];
+          return newStreams;
+        });
       };
 
       // Handle ICE candidates
@@ -259,20 +263,30 @@ export default function VideoCalling({
       )}
 
       {/* Video display */}
-      <div className="flex flex-1">
-        <video
-          ref={localVideoRef}
-          autoPlay
-          playsInline
-          muted
-          className="w-1/2 bg-black"
-        />
-        <video
-          ref={remoteVideoRef}
-          autoPlay
-          playsInline
-          className="w-1/2 bg-black"
-        />
+      <div className="flex flex-1 gap-4">
+        {/* Local Video */}
+        <div className="w-1/2">
+          <video
+            ref={localVideoRef}
+            autoPlay
+            playsInline
+            muted
+            className="w-full bg-black"
+          />
+        </div>
+
+        {/* Remote Videos */}
+        <div className="w-1/2">
+          {remoteStreams.map((stream, index) => (
+            <video
+              key={index}
+              ref={remoteVideoRefs}
+              autoPlay
+              playsInline
+              className="w-full bg-black"
+            />
+          ))}
+        </div>
       </div>
 
       {/* Control Bar */}
