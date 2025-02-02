@@ -9,11 +9,13 @@ import {
   getDocs,
   updateDoc,
   doc,
-  addDoc,
-  onSnapshot,
 } from "firebase/firestore";
 import { useContext } from "react";
 import { MeetingContext } from "../contexts/MeetingContext";
+import MeetingNotes from "./MeetingNotes";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import ResponsiveGrid from "./ResponsiveGrid";
 
 const configuration = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -24,6 +26,7 @@ export default function VideoCalling({
   userId,
   userName,
   onMeetingEnd,
+  participants,
 }) {
   const { resetActiveMeetingContext } = useContext(MeetingContext);
   const [error, setError] = useState(null);
@@ -31,12 +34,12 @@ export default function VideoCalling({
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [localStream, setLocalStream] = useState(null);
-  const [isMeetingEnded, setIsMeetingEnded] = useState(false); // Track meeting end status
+  const [isMeetingEnded, setIsMeetingEnded] = useState(false);
 
   const localVideoRef = useRef(null);
-  const remoteVideoRef = useRef(null);
   const pcRef = useRef(null);
 
+  // Initialize local video stream
   const initializeStream = async (isVideoEnabled) => {
     try {
       if (localStream) {
@@ -55,24 +58,6 @@ export default function VideoCalling({
           .catch((e) => console.log("Play error:", e));
       }
 
-      // Update peer connection if exists
-      if (pcRef.current) {
-        const senders = pcRef.current.getSenders();
-        const videoSender = senders.find(
-          (sender) => sender.track?.kind === "video"
-        );
-        const audioSender = senders.find(
-          (sender) => sender.track?.kind === "audio"
-        );
-
-        if (videoSender) {
-          videoSender.replaceTrack(stream.getVideoTracks()[0]);
-        }
-        if (audioSender) {
-          audioSender.replaceTrack(stream.getAudioTracks()[0]);
-        }
-      }
-
       setLocalStream(stream);
       return stream;
     } catch (err) {
@@ -82,6 +67,7 @@ export default function VideoCalling({
     }
   };
 
+  // Setup WebRTC peer connection
   const setupCall = async () => {
     try {
       const meetingsRef = collection(db, "meetings");
@@ -98,81 +84,27 @@ export default function VideoCalling({
 
       const meetingDoc = querySnapshot.docs[0];
       const meetingData = meetingDoc.data();
-      const hostFlag = meetingData.hostId === userId;
-      setIsHost(hostFlag);
+      setIsHost(meetingData.hostId === userId);
 
-      // Initialize stream
       const stream = await initializeStream(true);
       if (!stream) return;
 
-      // Create the RTCPeerConnection
       const pc = new RTCPeerConnection(configuration);
       pcRef.current = pc;
 
-      // Add tracks to peer connection
       stream.getTracks().forEach((track) => {
         pc.addTrack(track, stream);
       });
 
-      // Handle incoming tracks
       pc.ontrack = (event) => {
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = event.streams[0];
-        }
+        console.log("Remote track received", event.streams[0]);
       };
-
-      // Handle ICE candidates
-      pc.onicecandidate = async (event) => {
-        if (event.candidate) {
-          const candidateCollection = hostFlag
-            ? collection(meetingDoc.ref, "callerCandidates")
-            : collection(meetingDoc.ref, "calleeCandidates");
-          await addDoc(candidateCollection, event.candidate.toJSON());
-        }
-      };
-
-      // Set up signaling based on role (host/guest)
-      if (hostFlag) {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        await updateDoc(meetingDoc.ref, {
-          offer: {
-            type: offer.type,
-            sdp: offer.sdp,
-          },
-        });
-
-        onSnapshot(meetingDoc.ref, (snapshot) => {
-          const data = snapshot.data();
-          if (data?.answer && !pc.currentRemoteDescription) {
-            const answer = new RTCSessionDescription(data.answer);
-            pc.setRemoteDescription(answer);
-          }
-        });
-      } else {
-        onSnapshot(meetingDoc.ref, async (snapshot) => {
-          const data = snapshot.data();
-          if (data?.offer && !pc.currentRemoteDescription) {
-            await pc.setRemoteDescription(
-              new RTCSessionDescription(data.offer)
-            );
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            await updateDoc(meetingDoc.ref, {
-              answer: {
-                type: answer.type,
-                sdp: answer.sdp,
-              },
-            });
-          }
-        });
-      }
 
       // Listen for meeting status changes
       onSnapshot(meetingDoc.ref, (snapshot) => {
         const data = snapshot.data();
         if (data?.status === "ended") {
-          setIsMeetingEnded(true); // Set meeting as ended when status is updated
+          setIsMeetingEnded(true);
         }
       });
     } catch (err) {
@@ -181,42 +113,24 @@ export default function VideoCalling({
     }
   };
 
-  // Handle video toggle
+  // Toggle Video
   const toggleVideo = async () => {
-    try {
-      if (!isVideoOff) {
-        // Turn off video
-        if (localStream) {
-          const videoTracks = localStream.getVideoTracks();
-          videoTracks.forEach((track) => {
-            track.stop();
-            localStream.removeTrack(track);
-          });
-
-          // Clear the video element
-          if (localVideoRef.current) {
-            localVideoRef.current.srcObject = null;
-          }
-        }
-        setIsVideoOff(true);
-      } else {
-        // Turn on video
-        await initializeStream(true);
-        setIsVideoOff(false);
+    if (localStream) {
+      const videoTrack = localStream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        setIsVideoOff(!videoTrack.enabled);
       }
-    } catch (err) {
-      console.error("Error toggling video:", err);
-      setError("Failed to toggle video");
     }
   };
 
-  // Handle audio toggle
+  // Toggle Audio
   const toggleAudio = () => {
     if (localStream) {
       const audioTrack = localStream.getAudioTracks()[0];
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled;
-        setIsMuted(!isMuted);
+        setIsMuted(!audioTrack.enabled);
       }
     }
   };
@@ -233,16 +147,14 @@ export default function VideoCalling({
         await updateDoc(meetingDoc, { status: "ended" });
       }
 
-      // Reset active meeting status and context
       resetActiveMeetingContext();
-      onMeetingEnd(); // Trigger callback to update the UI
+      onMeetingEnd();
     } catch (err) {
       console.error("Error ending meeting:", err);
       setError("Failed to end meeting");
     }
   };
 
-  // Initialize call on component mount
   useEffect(() => {
     setupCall();
 
@@ -268,22 +180,15 @@ export default function VideoCalling({
         </div>
       )}
 
-      <div className="flex flex-1">
-        <video
-          ref={localVideoRef}
-          autoPlay
-          playsInline
-          muted
-          className="w-1/2 bg-black"
-        />
-        <video
-          ref={remoteVideoRef}
-          autoPlay
-          playsInline
-          className="w-1/2 bg-black"
-        />
-      </div>
+      {/* Video Grid */}
+      <ResponsiveGrid>
+        <ParticipantTile isLocal={true} videoRef={localVideoRef} />
+        {participants.map((participant, index) => (
+          <ParticipantTile key={index} participant={participant} />
+        ))}
+      </ResponsiveGrid>
 
+      {/* Controls */}
       <div className="p-4 bg-gray-800 flex items-center justify-center gap-4">
         <button
           onClick={toggleAudio}
@@ -312,6 +217,52 @@ export default function VideoCalling({
           </button>
         )}
       </div>
+
+      {/* Floating Notes Button */}
+      <MeetingNotes meetingId={meetingId} userId={userId} />
     </div>
+  );
+}
+
+// Participant Tile Component
+function ParticipantTile({ participant, isLocal = false, videoRef }) {
+  return (
+    <Card className="relative aspect-video overflow-hidden">
+      <CardContent className="p-0">
+        {isLocal ? (
+          <video
+            ref={videoRef}
+            autoPlay
+            muted
+            playsInline
+            className="w-full h-full object-cover"
+          />
+        ) : participant.videoOn ? (
+          <video
+            src={participant.videoStream}
+            autoPlay
+            muted
+            playsInline
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="flex items-center justify-center w-full h-full bg-gray-200 dark:bg-gray-700">
+            <span className="text-4xl">
+              {participant?.name?.[0]?.toUpperCase() || "A"}
+            </span>
+          </div>
+        )}
+        <div className="absolute bottom-2 left-2 right-2 flex justify-between items-center">
+          <Badge variant="secondary" className="text-xs">
+            {isLocal ? "You" : participant?.name || "Anonymous"}
+          </Badge>
+          {(isLocal || participant?.isMuted) && (
+            <Badge variant="destructive" className="text-xs">
+              Muted
+            </Badge>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
