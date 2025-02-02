@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useContext } from "react";
 import { db } from "../lib/firebase";
 import {
   collection,
@@ -12,7 +12,6 @@ import {
   addDoc,
   onSnapshot,
 } from "firebase/firestore";
-import { useContext } from "react";
 import { MeetingContext } from "../contexts/MeetingContext";
 import MeetingNotes from "./MeetingNotes";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,7 +27,6 @@ export default function VideoCalling({
   userId,
   userName,
   onMeetingEnd,
-  participants = [],
 }) {
   const { resetActiveMeetingContext } = useContext(MeetingContext);
   const [error, setError] = useState(null);
@@ -36,20 +34,22 @@ export default function VideoCalling({
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [localStream, setLocalStream] = useState(null);
+  const [remoteStreams, setRemoteStreams] = useState([]);
   const [isMeetingEnded, setIsMeetingEnded] = useState(false);
+  const [hasLeft, setHasLeft] = useState(false); // Track if user left the meeting
 
   const localVideoRef = useRef(null);
   const pcRef = useRef(null);
 
   // Initialize local video stream
-  const initializeStream = async (isVideoEnabled) => {
+  const initializeStream = async () => {
     try {
       if (localStream) {
         localStream.getTracks().forEach((track) => track.stop());
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: isVideoEnabled,
+        video: true,
         audio: true,
       });
 
@@ -88,7 +88,7 @@ export default function VideoCalling({
       const meetingData = meetingDoc.data();
       setIsHost(meetingData.hostId === userId);
 
-      const stream = await initializeStream(true);
+      const stream = await initializeStream();
       if (!stream) return;
 
       const pc = new RTCPeerConnection(configuration);
@@ -99,8 +99,55 @@ export default function VideoCalling({
       });
 
       pc.ontrack = (event) => {
-        console.log("Remote track received", event.streams[0]);
+        setRemoteStreams((prevStreams) => [...prevStreams, event.streams[0]]);
       };
+
+      // Handle ICE candidates
+      pc.onicecandidate = async (event) => {
+        if (event.candidate) {
+          const candidateCollection = isHost
+            ? collection(meetingDoc.ref, "callerCandidates")
+            : collection(meetingDoc.ref, "calleeCandidates");
+          await addDoc(candidateCollection, event.candidate.toJSON());
+        }
+      };
+
+      // Set up signaling based on role (host/guest)
+      if (isHost) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await updateDoc(meetingDoc.ref, {
+          offer: {
+            type: offer.type,
+            sdp: offer.sdp,
+          },
+        });
+
+        onSnapshot(meetingDoc.ref, (snapshot) => {
+          const data = snapshot.data();
+          if (data?.answer && !pc.currentRemoteDescription) {
+            const answer = new RTCSessionDescription(data.answer);
+            pc.setRemoteDescription(answer);
+          }
+        });
+      } else {
+        onSnapshot(meetingDoc.ref, async (snapshot) => {
+          const data = snapshot.data();
+          if (data?.offer && !pc.currentRemoteDescription) {
+            await pc.setRemoteDescription(
+              new RTCSessionDescription(data.offer)
+            );
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await updateDoc(meetingDoc.ref, {
+              answer: {
+                type: answer.type,
+                sdp: answer.sdp,
+              },
+            });
+          }
+        });
+      }
 
       // Listen for meeting status changes
       onSnapshot(meetingDoc.ref, (snapshot) => {
@@ -115,26 +162,21 @@ export default function VideoCalling({
     }
   };
 
-  // Toggle Video
-  const toggleVideo = async () => {
+  // Handle participant leaving the meeting
+  const leaveMeeting = () => {
     if (localStream) {
-      const videoTrack = localStream.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.enabled = !videoTrack.enabled;
-        setIsVideoOff(!videoTrack.enabled);
-      }
+      localStream.getTracks().forEach((track) => track.stop());
     }
+    if (pcRef.current) {
+      pcRef.current.close();
+    }
+    setHasLeft(true);
   };
 
-  // Toggle Audio
-  const toggleAudio = () => {
-    if (localStream) {
-      const audioTrack = localStream.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled;
-        setIsMuted(!audioTrack.enabled);
-      }
-    }
+  // Handle rejoining the meeting
+  const rejoinMeeting = async () => {
+    setHasLeft(false);
+    await setupCall();
   };
 
   // Handle ending meeting
@@ -157,8 +199,32 @@ export default function VideoCalling({
     }
   };
 
+  // Toggle video
+  const toggleVideo = () => {
+    if (localStream) {
+      const videoTrack = localStream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        setIsVideoOff(!videoTrack.enabled);
+      }
+    }
+  };
+
+  // Toggle mute
+  const toggleAudio = () => {
+    if (localStream) {
+      const audioTrack = localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        setIsMuted(!audioTrack.enabled);
+      }
+    }
+  };
+
   useEffect(() => {
-    setupCall();
+    if (!hasLeft) {
+      setupCall();
+    }
 
     return () => {
       if (localStream) {
@@ -168,7 +234,7 @@ export default function VideoCalling({
         pcRef.current.close();
       }
     };
-  }, [meetingId, userId]);
+  }, [meetingId, userId, hasLeft]);
 
   return (
     <div className="h-full flex flex-col">
@@ -183,41 +249,60 @@ export default function VideoCalling({
       )}
 
       {/* Video Grid */}
-      <ResponsiveGrid>
-        <ParticipantTile isLocal={true} videoRef={localVideoRef} />
-        {participants.map((participant, index) => (
-          <ParticipantTile key={index} participant={participant} />
-        ))}
-      </ResponsiveGrid>
+      {!hasLeft ? (
+        <ResponsiveGrid>
+          <ParticipantTile isLocal={true} videoRef={localVideoRef} />
+          {remoteStreams.map((stream, index) => (
+            <ParticipantTile key={index} videoStream={stream} />
+          ))}
+        </ResponsiveGrid>
+      ) : (
+        <div className="flex items-center justify-center h-full">
+          <button
+            onClick={rejoinMeeting}
+            className="p-4 bg-green-600 text-white rounded-lg shadow-lg hover:bg-green-700"
+          >
+            Rejoin Meeting
+          </button>
+        </div>
+      )}
 
       {/* Controls */}
       <div className="p-4 bg-gray-800 flex items-center justify-center gap-4">
-        <button
-          onClick={toggleAudio}
-          className={`p-3 rounded-full ${
-            isMuted ? "bg-red-600" : "bg-gray-700"
-          } hover:bg-opacity-80 transition`}
-        >
-          {isMuted ? "Unmute" : "Mute"}
-        </button>
-
-        <button
-          onClick={toggleVideo}
-          className={`p-3 rounded-full ${
-            isVideoOff ? "bg-red-600" : "bg-gray-700"
-          } hover:bg-opacity-80 transition`}
-        >
-          {isVideoOff ? "Enable Video" : "Disable Video"}
-        </button>
-
-        {isHost && (
-          <button
-            onClick={handleEndMeeting}
-            className="p-3 bg-red-600 rounded-full hover:bg-opacity-80 transition"
-          >
-            End Meeting
-          </button>
-        )}
+        {!hasLeft ? (
+          <>
+            <button
+              onClick={leaveMeeting}
+              className="p-3 bg-yellow-600 rounded-full hover:bg-opacity-80 transition"
+            >
+              Leave Meeting
+            </button>
+            <button
+              onClick={toggleAudio}
+              className={`p-3 rounded-full ${
+                isMuted ? "bg-red-600" : "bg-gray-700"
+              } hover:bg-opacity-80 transition`}
+            >
+              {isMuted ? "Unmute" : "Mute"}
+            </button>
+            <button
+              onClick={toggleVideo}
+              className={`p-3 rounded-full ${
+                isVideoOff ? "bg-red-600" : "bg-gray-700"
+              } hover:bg-opacity-80 transition`}
+            >
+              {isVideoOff ? "Enable Video" : "Disable Video"}
+            </button>
+            {isHost && (
+              <button
+                onClick={handleEndMeeting}
+                className="p-3 bg-red-600 rounded-full hover:bg-opacity-80 transition"
+              >
+                End Meeting
+              </button>
+            )}
+          </>
+        ) : null}
       </div>
 
       {/* Floating Notes Button */}
@@ -227,7 +312,12 @@ export default function VideoCalling({
 }
 
 // Participant Tile Component
-function ParticipantTile({ participant, isLocal = false, videoRef }) {
+function ParticipantTile({
+  participant,
+  isLocal = false,
+  videoRef,
+  videoStream,
+}) {
   return (
     <Card className="relative aspect-video overflow-hidden">
       <CardContent className="p-0">
@@ -239,9 +329,9 @@ function ParticipantTile({ participant, isLocal = false, videoRef }) {
             playsInline
             className="w-full h-full object-cover"
           />
-        ) : participant.videoOn ? (
+        ) : videoStream ? (
           <video
-            src={participant.videoStream}
+            src={videoStream}
             autoPlay
             muted
             playsInline
@@ -254,15 +344,10 @@ function ParticipantTile({ participant, isLocal = false, videoRef }) {
             </span>
           </div>
         )}
-        <div className="absolute bottom-2 left-2 right-2 flex justify-between items-center">
+        <div className="absolute bottom-2 left-2 right-2 flex justify-start items-center">
           <Badge variant="secondary" className="text-xs">
             {isLocal ? "You" : participant?.name || "Anonymous"}
           </Badge>
-          {(isLocal || participant?.isMuted) && (
-            <Badge variant="destructive" className="text-xs">
-              Muted
-            </Badge>
-          )}
         </div>
       </CardContent>
     </Card>
