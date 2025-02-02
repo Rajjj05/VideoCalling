@@ -9,6 +9,7 @@ import {
   updateDoc,
   onSnapshot,
   addDoc,
+  doc,
 } from "firebase/firestore";
 
 const configuration = {
@@ -26,6 +27,9 @@ export default function VideoCalling({
   const pcRef = useRef(null);
   const [error, setError] = useState(null);
   const [isHost, setIsHost] = useState(false);
+  const [localStream, setLocalStream] = useState(null);
+  const [isVideoOn, setIsVideoOn] = useState(true);
+  const [isAudioOn, setIsAudioOn] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -47,19 +51,21 @@ export default function VideoCalling({
         const hostFlag = meetingData.hostId === userId;
         setIsHost(hostFlag);
 
-        const localStream = await navigator.mediaDevices.getUserMedia({
+        const stream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: true,
         });
+        setLocalStream(stream);
+
         if (localVideoRef.current) {
-          localVideoRef.current.srcObject = localStream;
+          localVideoRef.current.srcObject = stream;
         }
 
         const pc = new RTCPeerConnection(configuration);
         pcRef.current = pc;
 
-        localStream.getTracks().forEach((track) => {
-          pc.addTrack(track, localStream);
+        stream.getTracks().forEach((track) => {
+          pc.addTrack(track, stream);
         });
 
         pc.ontrack = (event) => {
@@ -141,6 +147,9 @@ export default function VideoCalling({
       if (pcRef.current) {
         pcRef.current.close();
       }
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop());
+      }
     };
   }, [meetingId, userId]);
 
@@ -158,6 +167,18 @@ export default function VideoCalling({
       console.error("Error ending meeting:", err);
       setError("An error occurred while ending the meeting.");
     }
+  };
+
+  const toggleVideo = () => {
+    const newState = !isVideoOn;
+    setIsVideoOn(newState);
+    localStream.getVideoTracks()[0].enabled = newState;
+  };
+
+  const toggleAudio = () => {
+    const newState = !isAudioOn;
+    setIsAudioOn(newState);
+    localStream.getAudioTracks()[0].enabled = newState;
   };
 
   return (
@@ -188,7 +209,25 @@ export default function VideoCalling({
         />
       </div>
 
-      <div className="p-4">
+      <div className="p-4 flex justify-between">
+        <button
+          onClick={toggleAudio}
+          className={`px-4 py-2 ${
+            isAudioOn ? "bg-green-600" : "bg-gray-600"
+          } text-white rounded`}
+        >
+          {isAudioOn ? "Mute Audio" : "Unmute Audio"}
+        </button>
+
+        <button
+          onClick={toggleVideo}
+          className={`px-4 py-2 ${
+            isVideoOn ? "bg-green-600" : "bg-gray-600"
+          } text-white rounded`}
+        >
+          {isVideoOn ? "Turn Off Video" : "Turn On Video"}
+        </button>
+
         <button
           onClick={handleEndMeeting}
           className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
