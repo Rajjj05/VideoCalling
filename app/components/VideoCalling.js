@@ -1,5 +1,6 @@
-// components/VideoCalling.js
-import { useEffect, useRef, useState } from "react";
+"use client";
+
+import { useEffect, useRef, useState, useContext } from "react";
 import { db } from "../lib/firebase";
 import {
   collection,
@@ -7,9 +8,14 @@ import {
   where,
   getDocs,
   updateDoc,
-  onSnapshot,
+  doc,
   addDoc,
+  onSnapshot,
 } from "firebase/firestore";
+import { MeetingContext } from "../contexts/MeetingContext";
+import MeetingNotes from "./MeetingNotes";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 
 // STUN server configuration
 const configuration = {
@@ -22,151 +28,219 @@ export default function VideoCalling({
   userName,
   onMeetingEnd,
 }) {
-  const localVideoRef = useRef(null);
-  const remoteVideoRef = useRef(null);
-  const pcRef = useRef(null);
+  const { resetActiveMeetingContext } = useContext(MeetingContext);
   const [error, setError] = useState(null);
   const [isHost, setIsHost] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStreams, setRemoteStreams] = useState([]);
+  const [isMeetingEnded, setIsMeetingEnded] = useState(false);
+  const [hasLeft, setHasLeft] = useState(false); // Track if user left the meeting
+
+  const localVideoRef = useRef(null);
+  const pcRef = useRef(null);
+
+  // Initialize local video stream
+  const initializeStream = async () => {
+    try {
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop());
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
+
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+        await localVideoRef.current
+          .play()
+          .catch((e) => console.log("Play error:", e));
+      }
+
+      setLocalStream(stream);
+      return stream;
+    } catch (err) {
+      console.error("Error accessing media devices:", err);
+      setError("Failed to access camera or microphone");
+      return null;
+    }
+  };
+
+  // Setup WebRTC peer connection
+  const setupCall = async () => {
+    try {
+      const meetingsRef = collection(db, "meetings");
+      const meetingQuery = query(
+        meetingsRef,
+        where("meetingId", "==", meetingId)
+      );
+      const querySnapshot = await getDocs(meetingQuery);
+
+      if (querySnapshot.empty) {
+        setError("Meeting not found");
+        return;
+      }
+
+      const meetingDoc = querySnapshot.docs[0];
+      const meetingData = meetingDoc.data();
+      setIsHost(meetingData.hostId === userId);
+
+      const stream = await initializeStream();
+      if (!stream) return;
+
+      const pc = new RTCPeerConnection(configuration);
+      pcRef.current = pc;
+
+      // Add local media tracks to the peer connection
+      stream.getTracks().forEach((track) => {
+        pc.addTrack(track, stream);
+      });
+
+      // When receiving a remote stream
+      pc.ontrack = (event) => {
+        console.log("Remote track received", event.streams[0]);
+        setRemoteStreams((prevStreams) => [...prevStreams, event.streams[0]]);
+      };
+
+      // Handle ICE candidates
+      pc.onicecandidate = async (event) => {
+        if (event.candidate) {
+          const candidateCollection = isHost
+            ? collection(meetingDoc.ref, "callerCandidates")
+            : collection(meetingDoc.ref, "calleeCandidates");
+          await addDoc(candidateCollection, event.candidate.toJSON());
+        }
+      };
+
+      // Set up signaling based on role (host/guest)
+      if (isHost) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await updateDoc(meetingDoc.ref, {
+          offer: {
+            type: offer.type,
+            sdp: offer.sdp,
+          },
+        });
+
+        onSnapshot(meetingDoc.ref, (snapshot) => {
+          const data = snapshot.data();
+          if (data?.answer && !pc.currentRemoteDescription) {
+            const answer = new RTCSessionDescription(data.answer);
+            pc.setRemoteDescription(answer);
+          }
+        });
+      } else {
+        onSnapshot(meetingDoc.ref, async (snapshot) => {
+          const data = snapshot.data();
+          if (data?.offer && !pc.currentRemoteDescription) {
+            await pc.setRemoteDescription(
+              new RTCSessionDescription(data.offer)
+            );
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await updateDoc(meetingDoc.ref, {
+              answer: {
+                type: answer.type,
+                sdp: answer.sdp,
+              },
+            });
+          }
+        });
+      }
+
+      // Listen for meeting status changes
+      onSnapshot(meetingDoc.ref, (snapshot) => {
+        const data = snapshot.data();
+        if (data?.status === "ended") {
+          setIsMeetingEnded(true);
+        }
+      });
+    } catch (err) {
+      console.error("Error in setupCall:", err);
+      setError("Failed to setup call");
+    }
+  };
+
+  // Handle participant leaving the meeting
+  const leaveMeeting = () => {
+    if (localStream) {
+      localStream.getTracks().forEach((track) => track.stop());
+    }
+    if (pcRef.current) {
+      pcRef.current.close();
+    }
+    setHasLeft(true);
+  };
+
+  // Handle rejoining the meeting
+  const rejoinMeeting = async () => {
+    setHasLeft(false);
+    await setupCall();
+  };
+
+  // Handle ending meeting
+  const handleEndMeeting = async () => {
+    try {
+      const meetingsRef = collection(db, "meetings");
+      const q = query(meetingsRef, where("meetingId", "==", meetingId));
+      const snapshot = await getDocs(q);
+
+      if (!snapshot.empty) {
+        const meetingDoc = doc(db, "meetings", snapshot.docs[0].id);
+        await updateDoc(meetingDoc, { status: "ended" });
+      }
+
+      resetActiveMeetingContext();
+      onMeetingEnd();
+    } catch (err) {
+      console.error("Error ending meeting:", err);
+      setError("Failed to end meeting");
+    }
+  };
+
+  // Toggle audio
+  const toggleAudio = () => {
+    if (localStream) {
+      const audioTrack = localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        setIsMuted(!audioTrack.enabled);
+      }
+    }
+  };
+
+  // Toggle video
+  const toggleVideo = () => {
+    if (localStream) {
+      const videoTrack = localStream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        setIsVideoOff(!videoTrack.enabled);
+      }
+    }
+  };
 
   useEffect(() => {
-    // Wrap the async setup in an IIFE
-    (async () => {
-      try {
-        // 1. Fetch meeting document to determine if current user is the host
-        const meetingsRef = collection(db, "meetings");
-        const meetingQuery = query(
-          meetingsRef,
-          where("meetingId", "==", meetingId)
-        );
-        const querySnapshot = await getDocs(meetingQuery);
+    if (!hasLeft) {
+      setupCall();
+    }
 
-        if (querySnapshot.empty) {
-          setError("Meeting not found");
-          return;
-        }
-        const meetingDoc = querySnapshot.docs[0];
-        const meetingData = meetingDoc.data();
-        const hostFlag = meetingData.hostId === userId;
-        setIsHost(hostFlag);
-
-        // 2. Get user media (local video & audio)
-        const localStream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true,
-        });
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = localStream;
-        }
-
-        // 3. Create the RTCPeerConnection
-        const pc = new RTCPeerConnection(configuration);
-        pcRef.current = pc;
-
-        // Add local stream tracks to the peer connection
-        localStream.getTracks().forEach((track) => {
-          pc.addTrack(track, localStream);
-        });
-
-        // Display remote stream when received
-        pc.ontrack = (event) => {
-          if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = event.streams[0];
-          }
-        };
-
-        // Reference to the meeting document for signaling
-        const roomRef = meetingDoc.ref;
-
-        // 4. Handle ICE candidates: send them to Firestore in corresponding subcollection
-        pc.onicecandidate = async (event) => {
-          if (!event.candidate) return;
-          const jsonCandidate = event.candidate.toJSON();
-          if (hostFlag) {
-            const callerCandidates = collection(roomRef, "callerCandidates");
-            await addDoc(callerCandidates, jsonCandidate);
-          } else {
-            const calleeCandidates = collection(roomRef, "calleeCandidates");
-            await addDoc(calleeCandidates, jsonCandidate);
-          }
-        };
-
-        if (hostFlag) {
-          // 5A. Host: Create offer, set local description, and update Firestore with the offer
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          await updateDoc(roomRef, {
-            offer: {
-              type: offer.type,
-              sdp: offer.sdp,
-            },
-          });
-
-          // Listen for answer from the participant
-          onSnapshot(roomRef, (snapshot) => {
-            const data = snapshot.data();
-            if (data?.answer && !pc.currentRemoteDescription) {
-              const answer = new RTCSessionDescription(data.answer);
-              pc.setRemoteDescription(answer);
-            }
-          });
-
-          // Listen for ICE candidates from the callee
-          const calleeCandidates = collection(roomRef, "calleeCandidates");
-          onSnapshot(calleeCandidates, (snapshot) => {
-            snapshot.docChanges().forEach((change) => {
-              if (change.type === "added") {
-                const candidate = new RTCIceCandidate(change.doc.data());
-                pc.addIceCandidate(candidate);
-              }
-            });
-          });
-        } else {
-          // 5B. Participant: Wait for the host's offer, then create answer
-          onSnapshot(roomRef, async (snapshot) => {
-            const data = snapshot.data();
-            if (data?.offer && !pc.currentRemoteDescription) {
-              await pc.setRemoteDescription(
-                new RTCSessionDescription(data.offer)
-              );
-              const answer = await pc.createAnswer();
-              await pc.setLocalDescription(answer);
-              await updateDoc(roomRef, {
-                answer: {
-                  type: answer.type,
-                  sdp: answer.sdp,
-                },
-              });
-            }
-          });
-
-          // Listen for ICE candidates from the host
-          const callerCandidates = collection(roomRef, "callerCandidates");
-          onSnapshot(callerCandidates, (snapshot) => {
-            snapshot.docChanges().forEach((change) => {
-              if (change.type === "added") {
-                const candidate = new RTCIceCandidate(change.doc.data());
-                pc.addIceCandidate(candidate);
-              }
-            });
-          });
-        }
-      } catch (err) {
-        console.error("Error during setup:", err);
-        setError("An error occurred while setting up the call.");
-      }
-    })();
-
-    // Cleanup: close peer connection on component unmount
     return () => {
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop());
+      }
       if (pcRef.current) {
         pcRef.current.close();
       }
     };
-  }, [meetingId, userId]);
+  }, [meetingId, userId, hasLeft]);
 
   return (
     <div className="h-full flex flex-col">
-      {/* Display the meeting ID */}
       <div className="p-4 bg-gray-200">
         <p className="text-lg font-bold">Meeting ID: {meetingId}</p>
       </div>
@@ -177,32 +251,112 @@ export default function VideoCalling({
         </div>
       )}
 
-      {/* Video display */}
-      <div className="flex flex-1">
-        <video
-          ref={localVideoRef}
-          autoPlay
-          playsInline
-          muted
-          className="w-1/2 bg-black"
-        />
-        <video
-          ref={remoteVideoRef}
-          autoPlay
-          playsInline
-          className="w-1/2 bg-black"
-        />
+      {/* Video Grid */}
+      <div className="flex justify-center gap-4">
+        {/* Local Video */}
+        <div className="w-1/2">
+          <video
+            ref={localVideoRef}
+            autoPlay
+            muted
+            playsInline
+            className="w-full bg-black"
+          />
+        </div>
+
+        {/* Remote Video */}
+        <div className="w-1/2">
+          {remoteStreams.map((stream, index) => (
+            <video
+              key={index}
+              autoPlay
+              playsInline
+              ref={remoteVideoRef}
+              className="w-full bg-black"
+            />
+          ))}
+        </div>
       </div>
 
-      {/* End call button */}
-      <div className="p-4">
-        <button
-          onClick={onMeetingEnd}
-          className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
-        >
-          End Call
-        </button>
+      {/* Controls */}
+      <div className="p-4 bg-gray-800 flex items-center justify-center gap-4">
+        {!hasLeft ? (
+          <>
+            <button
+              onClick={toggleAudio}
+              className="p-3 bg-gray-700 rounded-full hover:bg-opacity-80 transition"
+            >
+              {isMuted ? "Unmute" : "Mute"}
+            </button>
+            <button
+              onClick={toggleVideo}
+              className="p-3 bg-gray-700 rounded-full hover:bg-opacity-80 transition"
+            >
+              {isVideoOff ? "Enable Video" : "Disable Video"}
+            </button>
+            <button
+              onClick={leaveMeeting}
+              className="p-3 bg-yellow-600 rounded-full hover:bg-opacity-80 transition"
+            >
+              Leave Meeting
+            </button>
+            {isHost && (
+              <button
+                onClick={handleEndMeeting}
+                className="p-3 bg-red-600 rounded-full hover:bg-opacity-80 transition"
+              >
+                End Meeting
+              </button>
+            )}
+          </>
+        ) : null}
       </div>
+
+      {/* Floating Notes Button */}
+      <MeetingNotes meetingId={meetingId} userId={userId} />
     </div>
+  );
+}
+
+// Participant Tile Component
+function ParticipantTile({
+  participant,
+  isLocal = false,
+  videoRef,
+  videoStream,
+}) {
+  return (
+    <Card className="relative aspect-video overflow-hidden">
+      <CardContent className="p-0">
+        {isLocal ? (
+          <video
+            ref={videoRef}
+            autoPlay
+            muted
+            playsInline
+            className="w-full h-full object-cover"
+          />
+        ) : videoStream ? (
+          <video
+            src={videoStream}
+            autoPlay
+            muted
+            playsInline
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="flex items-center justify-center w-full h-full bg-gray-200 dark:bg-gray-700">
+            <span className="text-4xl">
+              {participant?.name?.[0]?.toUpperCase() || "A"}
+            </span>
+          </div>
+        )}
+        <div className="absolute bottom-2 left-2 right-2 flex justify-start items-center">
+          <Badge variant="secondary" className="text-xs">
+            {isLocal ? "You" : participant?.name || "Anonymous"}
+          </Badge>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
