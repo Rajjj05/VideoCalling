@@ -203,6 +203,26 @@ export default function VideoCalling({
     }
   };
 
+  const toggleAudio = () => {
+    if (localStream) {
+      const audioTrack = localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        setIsMuted(!audioTrack.enabled);
+      }
+    }
+  };
+
+  const toggleVideo = () => {
+    if (localStream) {
+      const videoTrack = localStream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        setIsVideoOff(!videoTrack.enabled);
+      }
+    }
+  };
+
   useEffect(() => {
     if (!hasLeft) {
       setupCall();
@@ -253,6 +273,18 @@ export default function VideoCalling({
       <div className="p-4 bg-gray-800 flex items-center justify-center gap-4">
         {!hasLeft ? (
           <>
+            <button
+              onClick={toggleAudio}
+              className="p-3 bg-gray-700 rounded-full hover:bg-opacity-80 transition"
+            >
+              {isMuted ? "Unmute" : "Mute"}
+            </button>
+            <button
+              onClick={toggleVideo}
+              className="p-3 bg-gray-700 rounded-full hover:bg-opacity-80 transition"
+            >
+              {isVideoOff ? "Enable Video" : "Disable Video"}
+            </button>
             <button
               onClick={leaveMeeting}
               className="p-3 bg-yellow-600 rounded-full hover:bg-opacity-80 transition"
