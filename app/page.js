@@ -27,10 +27,6 @@ export default function Home() {
           description="Share screens, take notes, and chat in real-time."
         />
       </div>
-      <div className="mt-16">
-        <h2 className="text-2xl font-bold mb-4">Component Showcase</h2>
-        <ComponentShowcase />
-      </div>
     </div>
   );
 }
