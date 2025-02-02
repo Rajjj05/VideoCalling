@@ -11,6 +11,7 @@ import {
   addDoc,
   doc,
 } from "firebase/firestore";
+import MeetingNotes from "./MeetingNotes"; // Import the MeetingNotes component
 
 const configuration = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -235,6 +236,9 @@ export default function VideoCalling({
           End Call
         </button>
       </div>
+
+      {/* Include the MeetingNotes component */}
+      <MeetingNotes meetingId={meetingId} userId={userId} />
     </div>
   );
 }
