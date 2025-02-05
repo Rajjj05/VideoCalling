@@ -12,7 +12,7 @@ import {
   doc,
 } from "firebase/firestore";
 import MeetingNotes from "./MeetingNotes";
-import MeetingControls from "./MeetingControls";
+import MeetingControls from "./MeetingControl";
 
 const configuration = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
