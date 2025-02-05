@@ -13,6 +13,7 @@ import {
 } from "firebase/firestore";
 import MeetingNotes from "./MeetingNotes";
 import MeetingControls from "./MeetingControl";
+import ScreenShareButton from "./ScreenShareButton";
 
 const configuration = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -54,6 +55,15 @@ export default function VideoCalling({
         const hostFlag = meetingData.hostId === userId;
         setIsHost(hostFlag);
 
+        // Listen for changes in the meeting status to show the "Meeting ended" message
+        const roomRef = meetingDoc.ref;
+        const unsubscribe = onSnapshot(roomRef, (snapshot) => {
+          const data = snapshot.data();
+          if (data && data.status === "ended") {
+            setMeetingEnded(true);
+          }
+        });
+
         if (meetingData.status === "ended") {
           setMeetingEnded(true);
           return;
@@ -81,8 +91,6 @@ export default function VideoCalling({
             remoteVideoRef.current.srcObject = event.streams[0];
           }
         };
-
-        const roomRef = meetingDoc.ref;
 
         pc.onicecandidate = async (event) => {
           if (!event.candidate) return;
@@ -170,8 +178,20 @@ export default function VideoCalling({
     }
   };
 
-  const handleLeaveMeeting = () => {
-    console.log("User left the meeting");
+  const handleLeaveMeeting = async () => {
+    // Remove user stream without affecting meeting status
+    console.log("User is leaving the meeting...");
+    if (localStream) {
+      localStream.getTracks().forEach((track) => track.stop());
+    }
+
+    if (pcRef.current) {
+      pcRef.current.close();
+    }
+
+    // Allow user to rejoin later with the same meeting ID
+    setLocalStream(null);
+    setError("You have left the meeting.");
   };
 
   const toggleVideo = () => {
@@ -190,14 +210,6 @@ export default function VideoCalling({
     }
   };
 
-  if (meetingEnded) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-lg font-bold text-red-500">Meeting has ended.</p>
-      </div>
-    );
-  }
-
   return (
     <div className="h-full flex flex-col">
       <div className="p-4 bg-gray-200">
@@ -207,6 +219,13 @@ export default function VideoCalling({
       {error && (
         <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded m-4">
           {error}
+        </div>
+      )}
+
+      {/* Display "Meeting has ended" message if the meeting is ended */}
+      {meetingEnded && (
+        <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded m-4">
+          <p className="text-lg font-bold">Meeting has ended.</p>
         </div>
       )}
 
@@ -226,34 +245,36 @@ export default function VideoCalling({
         />
       </div>
 
+      {/* ✅ Audio/Video Toggle Buttons */}
       <div className="p-4 flex justify-between">
         <button
           onClick={toggleAudio}
-          className={`px-4 py-2 ${
-            isAudioOn ? "bg-green-600" : "bg-gray-600"
-          } text-white rounded`}
+          className="px-4 py-2 bg-green-600 text-white rounded"
         >
           {isAudioOn ? "Mute Audio" : "Unmute Audio"}
         </button>
-
         <button
           onClick={toggleVideo}
-          className={`px-4 py-2 ${
-            isVideoOn ? "bg-green-600" : "bg-gray-600"
-          } text-white rounded`}
+          className="px-4 py-2 bg-green-600 text-white rounded"
         >
           {isVideoOn ? "Turn Off Video" : "Turn On Video"}
         </button>
       </div>
 
+      {/* Meeting Controls - End / Leave */}
       <MeetingControls
         meetingId={meetingId}
         userId={userId}
         isHost={isHost}
         onLeave={handleLeaveMeeting}
         onEnd={handleEndMeeting}
+        localStream={localStream}
       />
 
+      {/* Screen Sharing */}
+      <ScreenShareButton pc={pcRef.current} localStream={localStream} />
+
+      {/* Meeting Notes */}
       <MeetingNotes meetingId={meetingId} userId={userId} />
     </div>
   );
