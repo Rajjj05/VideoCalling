@@ -11,7 +11,8 @@ import {
   addDoc,
   doc,
 } from "firebase/firestore";
-import MeetingNotes from "./MeetingNotes"; // Import the MeetingNotes component
+import MeetingNotes from "./MeetingNotes";
+import MeetingControls from "./MeetingControls";
 
 const configuration = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -28,6 +29,7 @@ export default function VideoCalling({
   const pcRef = useRef(null);
   const [error, setError] = useState(null);
   const [isHost, setIsHost] = useState(false);
+  const [meetingEnded, setMeetingEnded] = useState(false);
   const [localStream, setLocalStream] = useState(null);
   const [isVideoOn, setIsVideoOn] = useState(true);
   const [isAudioOn, setIsAudioOn] = useState(true);
@@ -52,12 +54,17 @@ export default function VideoCalling({
         const hostFlag = meetingData.hostId === userId;
         setIsHost(hostFlag);
 
+        if (meetingData.status === "ended") {
+          setMeetingEnded(true);
+          return;
+        }
+
         const stream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: true,
         });
-        setLocalStream(stream);
 
+        setLocalStream(stream);
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
         }
@@ -80,13 +87,10 @@ export default function VideoCalling({
         pc.onicecandidate = async (event) => {
           if (!event.candidate) return;
           const jsonCandidate = event.candidate.toJSON();
-          if (hostFlag) {
-            const callerCandidates = collection(roomRef, "callerCandidates");
-            await addDoc(callerCandidates, jsonCandidate);
-          } else {
-            const calleeCandidates = collection(roomRef, "calleeCandidates");
-            await addDoc(calleeCandidates, jsonCandidate);
-          }
+          const candidatesCollection = hostFlag
+            ? collection(roomRef, "callerCandidates")
+            : collection(roomRef, "calleeCandidates");
+          await addDoc(candidatesCollection, jsonCandidate);
         };
 
         if (hostFlag) {
@@ -98,9 +102,9 @@ export default function VideoCalling({
 
           onSnapshot(roomRef, (snapshot) => {
             const data = snapshot.data();
-            if (data?.answer && !pc.currentRemoteDescription) {
+            if (data?.answer && !pcRef.current.remoteDescription) {
               const answer = new RTCSessionDescription(data.answer);
-              pc.setRemoteDescription(answer);
+              pcRef.current.setRemoteDescription(answer);
             }
           });
 
@@ -109,19 +113,19 @@ export default function VideoCalling({
             snapshot.docChanges().forEach((change) => {
               if (change.type === "added") {
                 const candidate = new RTCIceCandidate(change.doc.data());
-                pc.addIceCandidate(candidate);
+                pcRef.current.addIceCandidate(candidate);
               }
             });
           });
         } else {
           onSnapshot(roomRef, async (snapshot) => {
             const data = snapshot.data();
-            if (data?.offer && !pc.currentRemoteDescription) {
-              await pc.setRemoteDescription(
+            if (data?.offer && !pcRef.current.remoteDescription) {
+              await pcRef.current.setRemoteDescription(
                 new RTCSessionDescription(data.offer)
               );
-              const answer = await pc.createAnswer();
-              await pc.setLocalDescription(answer);
+              const answer = await pcRef.current.createAnswer();
+              await pcRef.current.setLocalDescription(answer);
               await updateDoc(roomRef, {
                 answer: { type: answer.type, sdp: answer.sdp },
               });
@@ -133,7 +137,7 @@ export default function VideoCalling({
             snapshot.docChanges().forEach((change) => {
               if (change.type === "added") {
                 const candidate = new RTCIceCandidate(change.doc.data());
-                pc.addIceCandidate(candidate);
+                pcRef.current.addIceCandidate(candidate);
               }
             });
           });
@@ -156,13 +160,9 @@ export default function VideoCalling({
 
   const handleEndMeeting = async () => {
     try {
-      // Update meeting status to "ended" in Firestore
       const meetingRef = doc(db, "meetings", meetingId);
-      await updateDoc(meetingRef, {
-        status: "ended",
-      });
-
-      // Call the passed function to handle the redirection
+      await updateDoc(meetingRef, { status: "ended" });
+      setMeetingEnded(true);
       onMeetingEnd();
     } catch (err) {
       console.error("Error ending meeting:", err);
@@ -170,17 +170,33 @@ export default function VideoCalling({
     }
   };
 
+  const handleLeaveMeeting = () => {
+    console.log("User left the meeting");
+  };
+
   const toggleVideo = () => {
-    const newState = !isVideoOn;
-    setIsVideoOn(newState);
-    localStream.getVideoTracks()[0].enabled = newState;
+    if (localStream) {
+      const newState = !isVideoOn;
+      setIsVideoOn(newState);
+      localStream.getVideoTracks()[0].enabled = newState;
+    }
   };
 
   const toggleAudio = () => {
-    const newState = !isAudioOn;
-    setIsAudioOn(newState);
-    localStream.getAudioTracks()[0].enabled = newState;
+    if (localStream) {
+      const newState = !isAudioOn;
+      setIsAudioOn(newState);
+      localStream.getAudioTracks()[0].enabled = newState;
+    }
   };
+
+  if (meetingEnded) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <p className="text-lg font-bold text-red-500">Meeting has ended.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex flex-col">
@@ -228,16 +244,16 @@ export default function VideoCalling({
         >
           {isVideoOn ? "Turn Off Video" : "Turn On Video"}
         </button>
-
-        <button
-          onClick={handleEndMeeting}
-          className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
-        >
-          End Call
-        </button>
       </div>
 
-      {/* Include the MeetingNotes component */}
+      <MeetingControls
+        meetingId={meetingId}
+        userId={userId}
+        isHost={isHost}
+        onLeave={handleLeaveMeeting}
+        onEnd={handleEndMeeting}
+      />
+
       <MeetingNotes meetingId={meetingId} userId={userId} />
     </div>
   );
