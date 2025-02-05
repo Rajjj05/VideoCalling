@@ -3,56 +3,47 @@ import { useState } from "react";
 
 export default function ScreenShareButton({ pc, localStream }) {
   const [isSharing, setIsSharing] = useState(false);
-  let screenStream = null;
-  let originalTrack = null;
 
-  const startScreenShare = async () => {
+  const handleScreenShare = async () => {
+    if (!navigator.mediaDevices.getDisplayMedia) {
+      alert("Screen sharing is not supported on this device.");
+      return;
+    }
+
     try {
-      // Ask user to select a screen, window, or tab to share
-      screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { cursor: "always" },
-        audio: false, // Set to true if system audio sharing is needed
-      });
+      if (!isSharing) {
+        // Start screen sharing
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+        });
 
-      setIsSharing(true);
-      const screenTrack = screenStream.getVideoTracks()[0];
+        const sender = pc.getSenders().find((s) => s.track.kind === "video");
+        if (sender) {
+          sender.replaceTrack(screenStream.getVideoTracks()[0]);
+        }
 
-      // Store the original video track before replacing it
-      originalTrack = localStream.getVideoTracks()[0];
+        setIsSharing(true);
 
-      // Replace video track in peer connection
-      const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-      if (sender) sender.replaceTrack(screenTrack);
-
-      // Stop screen sharing when user presses "Stop Sharing"
-      screenTrack.onended = () => stopScreenShare();
-    } catch (error) {
-      console.error("Error starting screen share:", error);
+        screenStream.getVideoTracks()[0].onended = () => {
+          stopScreenShare(sender);
+        };
+      }
+    } catch (err) {
+      console.error("Screen sharing failed:", err);
     }
   };
 
-  const stopScreenShare = () => {
-    if (screenStream) {
-      screenStream.getTracks().forEach((track) => track.stop());
+  const stopScreenShare = async (sender) => {
+    if (localStream) {
+      sender.replaceTrack(localStream.getVideoTracks()[0]);
     }
-
     setIsSharing(false);
-
-    // Restore the original webcam video track
-    const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-    if (sender && originalTrack) {
-      sender.replaceTrack(originalTrack);
-    }
   };
 
   return (
     <button
-      onClick={isSharing ? stopScreenShare : startScreenShare}
-      className={`px-4 py-2 rounded text-white ${
-        isSharing
-          ? "bg-red-600 hover:bg-red-700"
-          : "bg-blue-600 hover:bg-blue-700"
-      }`}
+      onClick={handleScreenShare}
+      className="px-4 py-2 bg-blue-600 text-white rounded"
     >
       {isSharing ? "Stop Sharing" : "Share Screen"}
     </button>

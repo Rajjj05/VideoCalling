@@ -36,7 +36,9 @@ export default function VideoCalling({
   const [isAudioOn, setIsAudioOn] = useState(true);
 
   useEffect(() => {
-    (async () => {
+    let unsubscribe = null;
+
+    const initializeMeeting = async () => {
       try {
         const meetingsRef = collection(db, "meetings");
         const meetingQuery = query(
@@ -55,11 +57,12 @@ export default function VideoCalling({
         const hostFlag = meetingData.hostId === userId;
         setIsHost(hostFlag);
 
-        // Listen for changes in the meeting status to show the "Meeting ended" message
         const roomRef = meetingDoc.ref;
-        const unsubscribe = onSnapshot(roomRef, (snapshot) => {
+
+        // Listen for meeting status updates
+        unsubscribe = onSnapshot(roomRef, (snapshot) => {
           const data = snapshot.data();
-          if (data && data.status === "ended") {
+          if (data?.status === "ended") {
             setMeetingEnded(true);
           }
         });
@@ -69,6 +72,7 @@ export default function VideoCalling({
           return;
         }
 
+        // Fetch user media
         const stream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: true,
@@ -154,9 +158,12 @@ export default function VideoCalling({
         console.error("Error during setup:", err);
         setError("An error occurred while setting up the call.");
       }
-    })();
+    };
+
+    initializeMeeting();
 
     return () => {
+      if (unsubscribe) unsubscribe();
       if (pcRef.current) {
         pcRef.current.close();
       }
@@ -166,6 +173,19 @@ export default function VideoCalling({
     };
   }, [meetingId, userId]);
 
+  // ✅ Leave Meeting
+  const handleLeaveMeeting = () => {
+    if (localStream) {
+      localStream.getTracks().forEach((track) => track.stop());
+    }
+    if (pcRef.current) {
+      pcRef.current.close();
+    }
+    setLocalStream(null);
+    setError("You have left the meeting.");
+  };
+
+  // ✅ End Meeting (For Host)
   const handleEndMeeting = async () => {
     try {
       const meetingRef = doc(db, "meetings", meetingId);
@@ -178,22 +198,7 @@ export default function VideoCalling({
     }
   };
 
-  const handleLeaveMeeting = async () => {
-    // Remove user stream without affecting meeting status
-    console.log("User is leaving the meeting...");
-    if (localStream) {
-      localStream.getTracks().forEach((track) => track.stop());
-    }
-
-    if (pcRef.current) {
-      pcRef.current.close();
-    }
-
-    // Allow user to rejoin later with the same meeting ID
-    setLocalStream(null);
-    setError("You have left the meeting.");
-  };
-
+  // ✅ Toggle Video
   const toggleVideo = () => {
     if (localStream) {
       const newState = !isVideoOn;
@@ -202,6 +207,7 @@ export default function VideoCalling({
     }
   };
 
+  // ✅ Toggle Audio
   const toggleAudio = () => {
     if (localStream) {
       const newState = !isAudioOn;
@@ -212,17 +218,6 @@ export default function VideoCalling({
 
   return (
     <div className="h-full flex flex-col">
-      <div className="p-4 bg-gray-200">
-        <p className="text-lg font-bold">Meeting ID: {meetingId}</p>
-      </div>
-
-      {error && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded m-4">
-          {error}
-        </div>
-      )}
-
-      {/* Display "Meeting has ended" message if the meeting is ended */}
       {meetingEnded && (
         <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded m-4">
           <p className="text-lg font-bold">Meeting has ended.</p>
@@ -261,7 +256,10 @@ export default function VideoCalling({
         </button>
       </div>
 
-      {/* Meeting Controls - End / Leave */}
+      {/* ✅ Screen Sharing */}
+      <ScreenShareButton pc={pcRef.current} localStream={localStream} />
+
+      {/* ✅ Meeting Controls */}
       <MeetingControls
         meetingId={meetingId}
         userId={userId}
@@ -271,10 +269,7 @@ export default function VideoCalling({
         localStream={localStream}
       />
 
-      {/* Screen Sharing */}
-      <ScreenShareButton pc={pcRef.current} localStream={localStream} />
-
-      {/* Meeting Notes */}
+      {/* ✅ Meeting Notes */}
       <MeetingNotes meetingId={meetingId} userId={userId} />
     </div>
   );
