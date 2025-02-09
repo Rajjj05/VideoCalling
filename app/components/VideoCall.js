@@ -22,11 +22,11 @@ const VideoCall = ({ meetingId, isHost, meetingHostId }) => {
   const [remoteStreams, setRemoteStreams] = useState([]);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
+  const [peerConnections, setPeerConnections] = useState({});
 
   const localVideoRef = useRef(null);
   const remoteVideoRefs = useRef([]);
   const [meetingStatus, setMeetingStatus] = useState("active");
-  const [peerConnections, setPeerConnections] = useState({});
   const router = useRouter();
 
   // Function to end the meeting and update Firestore
@@ -66,9 +66,12 @@ const VideoCall = ({ meetingId, isHost, meetingHostId }) => {
 
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         setLocalStream(stream);
+
+        // Set the local video stream (check if ref is set)
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
         }
+
         sendSignalingMessage({ type: "join", meetingId }); // Notify server when joining the meeting
       } catch (error) {
         console.error("Error accessing media devices:", error);
@@ -95,6 +98,7 @@ const VideoCall = ({ meetingId, isHost, meetingHostId }) => {
         });
 
         peerConnection.ontrack = (event) => {
+          // Add remote video stream
           setRemoteStreams((prevStreams) => [...prevStreams, event.streams[0]]);
         };
         setPeerConnections((prev) => ({
@@ -122,6 +126,15 @@ const VideoCall = ({ meetingId, isHost, meetingHostId }) => {
       window.removeEventListener("message", handleSignalingMessage);
     };
   }, [meetingId, peerConnections]);
+
+  // Update remote video elements when streams are added
+  useEffect(() => {
+    remoteVideoRefs.current.forEach((ref, index) => {
+      if (ref && remoteStreams[index]) {
+        ref.srcObject = remoteStreams[index];
+      }
+    });
+  }, [remoteStreams]);
 
   const toggleAudio = () => {
     setIsMuted(!isMuted);
