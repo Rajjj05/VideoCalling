@@ -1,4 +1,4 @@
-"use client"; // Ensure this is a client-side component
+"use client";
 
 import { useState, useEffect, useRef } from "react";
 import {
@@ -9,8 +9,6 @@ import {
 } from "react-icons/fa"; // Import icons
 import { sendSignalingMessage } from "../lib/websocket"; // Import sendSignalingMessage
 import { useRouter } from "next/navigation"; // Import router for navigation
-import { db } from "../lib/firebase"; // Assuming you're using Firebase for DB interaction
-import { doc, updateDoc } from "firebase/firestore"; // Firestore functions
 
 const VideoCall = ({ meetingId, userId, isHost }) => {
   const [localStream, setLocalStream] = useState(null);
@@ -108,17 +106,39 @@ const VideoCall = ({ meetingId, userId, isHost }) => {
 
   const handleOffer = (offer) => {
     const peerConnection = new RTCPeerConnection(configuration);
+
+    // Set the remote description (received offer)
     peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
 
+    // Create an answer and set the local description
     peerConnection.createAnswer().then((answer) => {
       peerConnection.setLocalDescription(answer);
       sendSignalingMessage({ type: "answer", answer, roomId: meetingId });
     });
 
+    // Add tracks from the local stream to the peer connection
+    localStream.getTracks().forEach((track) => {
+      peerConnection.addTrack(track, localStream);
+    });
+
+    // Handle incoming remote streams
     peerConnection.ontrack = (event) => {
-      setRemoteStreams((prevStreams) => [...prevStreams, event.streams[0]]);
+      const remoteStream = event.streams[0];
+      setRemoteStreams((prevStreams) => [...prevStreams, remoteStream]);
     };
 
+    // Handle ICE candidates
+    peerConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendSignalingMessage({
+          type: "candidate",
+          candidate: event.candidate,
+          roomId: meetingId,
+        });
+      }
+    };
+
+    // Save the peer connection
     peerConnections.current[meetingId] = peerConnection;
   };
 
