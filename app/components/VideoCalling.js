@@ -1,4 +1,3 @@
-// components/VideoCalling.js
 import { useEffect, useRef, useState } from "react";
 import { db } from "../lib/firebase";
 import {
@@ -14,6 +13,8 @@ import {
 import MeetingNotes from "./MeetingNotes";
 import MeetingControls from "./MeetingControl";
 import ScreenShareButton from "./ScreenShareButton";
+import { Button } from "@/components/ui/button"; // ✅ Importing ShadCN Button
+import { ClipboardCopy } from "lucide-react"; // ✅ ShadCN Icon for Copy Button
 
 const configuration = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -26,17 +27,19 @@ export default function VideoCalling({
   onMeetingEnd,
 }) {
   const localVideoRef = useRef(null);
-  const remoteVideoRef = useRef(null);
-  const pcRef = useRef(null);
+  const [remoteStreams, setRemoteStreams] = useState([]); // Store multiple participant streams
+  const [peerConnections, setPeerConnections] = useState({});
   const [error, setError] = useState(null);
   const [isHost, setIsHost] = useState(false);
   const [meetingEnded, setMeetingEnded] = useState(false);
   const [localStream, setLocalStream] = useState(null);
   const [isVideoOn, setIsVideoOn] = useState(true);
   const [isAudioOn, setIsAudioOn] = useState(true);
+  const [copied, setCopied] = useState(false); // ✅ State to show "Copied!"
 
   useEffect(() => {
     let unsubscribe = null;
+    let stream = null;
 
     const initializeMeeting = async () => {
       try {
@@ -56,10 +59,8 @@ export default function VideoCalling({
         const meetingData = meetingDoc.data();
         const hostFlag = meetingData.hostId === userId;
         setIsHost(hostFlag);
-
         const roomRef = meetingDoc.ref;
 
-        // Listen for meeting status updates
         unsubscribe = onSnapshot(roomRef, (snapshot) => {
           const data = snapshot.data();
           if (data?.status === "ended") {
@@ -72,88 +73,52 @@ export default function VideoCalling({
           return;
         }
 
-        // Fetch user media
-        const stream = await navigator.mediaDevices.getUserMedia({
+        // Get user media
+        stream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: true,
         });
-
         setLocalStream(stream);
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
         }
 
-        const pc = new RTCPeerConnection(configuration);
-        pcRef.current = pc;
+        // Handle new participants
+        const participantsRef = collection(roomRef, "participants");
+        await addDoc(participantsRef, { userId, userName });
 
-        stream.getTracks().forEach((track) => {
-          pc.addTrack(track, stream);
-        });
+        onSnapshot(participantsRef, async (snapshot) => {
+          const participants = snapshot.docs.map((doc) => doc.data());
+          const newPeerConnections = { ...peerConnections };
 
-        pc.ontrack = (event) => {
-          if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = event.streams[0];
+          for (const participant of participants) {
+            if (
+              participant.userId !== userId &&
+              !newPeerConnections[participant.userId]
+            ) {
+              const pc = new RTCPeerConnection(configuration);
+              stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+              pc.ontrack = (event) => {
+                setRemoteStreams((prev) => [...prev, event.streams[0]]);
+              };
+
+              pc.onicecandidate = async (event) => {
+                if (event.candidate) {
+                  const iceRef = collection(
+                    roomRef,
+                    `iceCandidates_${userId}_${participant.userId}`
+                  );
+                  await addDoc(iceRef, event.candidate.toJSON());
+                }
+              };
+
+              newPeerConnections[participant.userId] = pc;
+            }
           }
-        };
 
-        pc.onicecandidate = async (event) => {
-          if (!event.candidate) return;
-          const jsonCandidate = event.candidate.toJSON();
-          const candidatesCollection = hostFlag
-            ? collection(roomRef, "callerCandidates")
-            : collection(roomRef, "calleeCandidates");
-          await addDoc(candidatesCollection, jsonCandidate);
-        };
-
-        if (hostFlag) {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          await updateDoc(roomRef, {
-            offer: { type: offer.type, sdp: offer.sdp },
-          });
-
-          onSnapshot(roomRef, (snapshot) => {
-            const data = snapshot.data();
-            if (data?.answer && !pcRef.current.remoteDescription) {
-              const answer = new RTCSessionDescription(data.answer);
-              pcRef.current.setRemoteDescription(answer);
-            }
-          });
-
-          const calleeCandidates = collection(roomRef, "calleeCandidates");
-          onSnapshot(calleeCandidates, (snapshot) => {
-            snapshot.docChanges().forEach((change) => {
-              if (change.type === "added") {
-                const candidate = new RTCIceCandidate(change.doc.data());
-                pcRef.current.addIceCandidate(candidate);
-              }
-            });
-          });
-        } else {
-          onSnapshot(roomRef, async (snapshot) => {
-            const data = snapshot.data();
-            if (data?.offer && !pcRef.current.remoteDescription) {
-              await pcRef.current.setRemoteDescription(
-                new RTCSessionDescription(data.offer)
-              );
-              const answer = await pcRef.current.createAnswer();
-              await pcRef.current.setLocalDescription(answer);
-              await updateDoc(roomRef, {
-                answer: { type: answer.type, sdp: answer.sdp },
-              });
-            }
-          });
-
-          const callerCandidates = collection(roomRef, "callerCandidates");
-          onSnapshot(callerCandidates, (snapshot) => {
-            snapshot.docChanges().forEach((change) => {
-              if (change.type === "added") {
-                const candidate = new RTCIceCandidate(change.doc.data());
-                pcRef.current.addIceCandidate(candidate);
-              }
-            });
-          });
-        }
+          setPeerConnections(newPeerConnections);
+        });
       } catch (err) {
         console.error("Error during setup:", err);
         setError("An error occurred while setting up the call.");
@@ -164,28 +129,26 @@ export default function VideoCalling({
 
     return () => {
       if (unsubscribe) unsubscribe();
-      if (pcRef.current) {
-        pcRef.current.close();
+      for (const pc of Object.values(peerConnections)) {
+        pc.close();
       }
-      if (localStream) {
-        localStream.getTracks().forEach((track) => track.stop());
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
       }
     };
   }, [meetingId, userId]);
 
-  // ✅ Leave Meeting
   const handleLeaveMeeting = () => {
     if (localStream) {
       localStream.getTracks().forEach((track) => track.stop());
     }
-    if (pcRef.current) {
-      pcRef.current.close();
+    for (const pc of Object.values(peerConnections)) {
+      pc.close();
     }
     setLocalStream(null);
     setError("You have left the meeting.");
   };
 
-  // ✅ End Meeting (For Host)
   const handleEndMeeting = async () => {
     try {
       const meetingRef = doc(db, "meetings", meetingId);
@@ -216,6 +179,13 @@ export default function VideoCalling({
     }
   };
 
+  // ✅ Copy Meeting ID
+  const copyMeetingId = () => {
+    navigator.clipboard.writeText(meetingId);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000); // Reset "Copied!" after 2 sec
+  };
+
   return (
     <div className="h-full flex flex-col">
       {meetingEnded && (
@@ -224,42 +194,52 @@ export default function VideoCalling({
         </div>
       )}
 
-      <div className="flex flex-1">
+      {/* ✅ Meeting ID with Copy Button */}
+      <div className="flex items-center justify-between p-4 bg-gray-200">
+        <p className="text-lg font-bold">Meeting ID: {meetingId}</p>
+        <Button
+          onClick={copyMeetingId}
+          className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded"
+        >
+          <ClipboardCopy size={18} />
+          {copied ? "Copied!" : "Copy"}
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap gap-4 p-4">
         <video
           ref={localVideoRef}
           autoPlay
           playsInline
           muted
-          className="w-1/2 bg-black"
+          className="w-1/3 bg-black rounded"
         />
-        <video
-          ref={remoteVideoRef}
-          autoPlay
-          playsInline
-          className="w-1/2 bg-black"
-        />
+        {remoteStreams.map((stream, index) => (
+          <video
+            key={index}
+            autoPlay
+            playsInline
+            className="w-1/3 bg-black rounded"
+            ref={(el) => el && (el.srcObject = stream)}
+          />
+        ))}
       </div>
 
       {/* ✅ Audio/Video Toggle Buttons */}
-      <div className="p-4 flex justify-between">
-        <button
-          onClick={toggleAudio}
-          className="px-4 py-2 bg-green-600 text-white rounded"
-        >
+      <div className="p-4 flex justify-center gap-4">
+        <Button onClick={toggleAudio} className="bg-green-600 text-white">
           {isAudioOn ? "Mute Audio" : "Unmute Audio"}
-        </button>
-        <button
-          onClick={toggleVideo}
-          className="px-4 py-2 bg-green-600 text-white rounded"
-        >
+        </Button>
+        <Button onClick={toggleVideo} className="bg-green-600 text-white">
           {isVideoOn ? "Turn Off Video" : "Turn On Video"}
-        </button>
+        </Button>
       </div>
 
-      {/* ✅ Screen Sharing */}
-      <ScreenShareButton pc={pcRef.current} localStream={localStream} />
+      <ScreenShareButton
+        pc={peerConnections[userId]}
+        localStream={localStream}
+      />
 
-      {/* ✅ Meeting Controls */}
       <MeetingControls
         meetingId={meetingId}
         userId={userId}
@@ -269,7 +249,6 @@ export default function VideoCalling({
         localStream={localStream}
       />
 
-      {/* ✅ Meeting Notes */}
       <MeetingNotes meetingId={meetingId} userId={userId} />
     </div>
   );
