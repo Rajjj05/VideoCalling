@@ -115,7 +115,7 @@ export default function VideoCalling({
 
               newPeerConnections[participant.userId] = pc;
 
-              // Offer & Answer exchange
+              // Exchange SDP Offer & Answer
               const offerRef = collection(
                 roomRef,
                 `offers_${userId}_${participant.userId}`
@@ -242,11 +242,20 @@ export default function VideoCalling({
         ))}
       </div>
 
+      {/* ✅ Audio/Video Toggle Buttons */}
+      <div className="p-4 flex justify-center gap-4">
+        <Button onClick={toggleAudio} className="bg-green-600 text-white">
+          {isAudioOn ? "Mute Audio" : "Unmute Audio"}
+        </Button>
+        <Button onClick={toggleVideo} className="bg-green-600 text-white">
+          {isVideoOn ? "Turn Off Video" : "Turn On Video"}
+        </Button>
+      </div>
+
       <ScreenShareButton
         pc={peerConnections[userId]}
         localStream={localStream}
       />
-
       <MeetingControls
         meetingId={meetingId}
         userId={userId}
@@ -255,7 +264,6 @@ export default function VideoCalling({
         onEnd={handleEndMeeting}
         localStream={localStream}
       />
-
       <MeetingNotes meetingId={meetingId} userId={userId} />
     </div>
   );
