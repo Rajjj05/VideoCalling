@@ -7,50 +7,27 @@ import {
   FaVideo,
   FaVideoSlash,
 } from "react-icons/fa"; // Import icons
+import { sendSignalingMessage } from "../lib/websocket"; // Import sendSignalingMessage
 import { useRouter } from "next/navigation"; // Import router for navigation
-import { sendSignalingMessage } from "../lib/websocket"; // WebSocket signaling
-import { db } from "../lib/firebase";
-import { doc, updateDoc } from "firebase/firestore";
+import { db } from "../lib/firebase"; // Assuming you're using Firebase for DB interaction
+import { doc, updateDoc } from "firebase/firestore"; // Firestore functions
 
-// WebRTC configuration
-const configuration = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-};
-
-const VideoCall = ({ meetingId, isHost, meetingHostId }) => {
+const VideoCall = ({ meetingId, userId, isHost }) => {
   const [localStream, setLocalStream] = useState(null);
   const [remoteStreams, setRemoteStreams] = useState([]);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
-  const [peerConnections, setPeerConnections] = useState({});
+  const [isWebSocketOpen, setIsWebSocketOpen] = useState(false); // Track WebSocket connection status
 
   const localVideoRef = useRef(null);
   const remoteVideoRefs = useRef([]);
-  const [meetingStatus, setMeetingStatus] = useState("active");
-  const router = useRouter();
+  const peerConnections = useRef({}); // Store peer connections
+  const router = useRouter(); // Next.js router for navigation
 
-  // Function to end the meeting and update Firestore
-  const endMeeting = async () => {
-    try {
-      if (!isHost) return; // Only host can end the meeting
-
-      const meetingRef = doc(db, "meetings", meetingId);
-      await updateDoc(meetingRef, {
-        status: "ended",
-      });
-
-      // Update status to ended
-      setMeetingStatus("ended");
-      console.log("Meeting ended");
-
-      // Redirect the user to /meetings page
-      router.push("/meetings");
-    } catch (error) {
-      console.error("Error ending the meeting:", error);
-    }
+  const configuration = {
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
   };
 
-  // Function to get local stream (audio + video)
   useEffect(() => {
     const getLocalStream = async () => {
       try {
@@ -59,140 +36,144 @@ const VideoCall = ({ meetingId, isHost, meetingHostId }) => {
           audio: !isMuted,
         };
 
-        // If both audio and video are off, fallback to video on
-        if (!constraints.video && !constraints.audio) {
-          constraints.video = true; // Fallback to video if both are off
-        }
-
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         setLocalStream(stream);
+        localVideoRef.current.srcObject = stream;
 
-        // Set the local video stream (check if ref is set)
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
+        // Ensure WebSocket is open before sending signaling message
+        if (isWebSocketOpen) {
+          sendSignalingMessage({
+            type: "join",
+            roomId: meetingId,
+            userId,
+            isHost,
+          });
+        } else {
+          console.log("WebSocket is not open, retrying...");
+          const intervalId = setInterval(() => {
+            if (isWebSocketOpen) {
+              sendSignalingMessage({
+                type: "join",
+                roomId: meetingId,
+                userId,
+                isHost,
+              });
+              clearInterval(intervalId); // Stop retrying once WebSocket is open
+            }
+          }, 1000); // Retry every second until WebSocket is open
         }
-
-        sendSignalingMessage({ type: "join", meetingId }); // Notify server when joining the meeting
-      } catch (error) {
-        console.error("Error accessing media devices:", error);
+      } catch (err) {
+        console.error("Error accessing media devices:", err);
       }
     };
 
     getLocalStream();
-  }, [isMuted, isVideoOff, meetingId]);
+  }, [isMuted, isVideoOff, meetingId, userId, isWebSocketOpen]);
 
-  // WebRTC signaling for remote streams
   useEffect(() => {
     const handleSignalingMessage = (data) => {
-      const { type, offer, answer, candidate, meetingId } = data;
+      const { type, offer, answer, candidate, roomId } = data;
 
-      if (meetingId !== meetingId) return;
+      if (roomId !== meetingId) return;
 
-      if (type === "offer") {
-        // Handle offer
-        const peerConnection = new RTCPeerConnection(configuration);
-        peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-        peerConnection.createAnswer().then((answer) => {
-          peerConnection.setLocalDescription(answer);
-          sendSignalingMessage({ type: "answer", answer, meetingId });
-        });
-
-        peerConnection.ontrack = (event) => {
-          // Add remote video stream
-          setRemoteStreams((prevStreams) => [...prevStreams, event.streams[0]]);
-        };
-        setPeerConnections((prev) => ({
-          ...prev,
-          [meetingId]: peerConnection,
-        }));
-      } else if (type === "answer") {
-        // Handle answer
-        peerConnections[meetingId].setRemoteDescription(
-          new RTCSessionDescription(answer)
-        );
-      } else if (type === "candidate") {
-        // Handle ICE candidate
-        const candidate = new RTCIceCandidate(candidate);
-        peerConnections[meetingId].addIceCandidate(candidate);
+      switch (type) {
+        case "offer":
+          handleOffer(offer);
+          break;
+        case "answer":
+          handleAnswer(answer);
+          break;
+        case "candidate":
+          handleCandidate(candidate);
+          break;
+        case "new-participant":
+          console.log(`${data.userId} joined the room`);
+          break;
+        case "participant-left":
+          console.log(`${data.userId} left the room`);
+          break;
+        default:
+          break;
       }
     };
 
-    // Listen for signaling messages
-    window.addEventListener("message", (event) => {
-      handleSignalingMessage(event.data);
-    });
+    window.addEventListener("message", (event) =>
+      handleSignalingMessage(event.data)
+    );
 
     return () => {
       window.removeEventListener("message", handleSignalingMessage);
     };
-  }, [meetingId, peerConnections]);
+  }, [meetingId]);
 
-  // Update remote video elements when streams are added
-  useEffect(() => {
-    remoteVideoRefs.current.forEach((ref, index) => {
-      if (ref && remoteStreams[index]) {
-        ref.srcObject = remoteStreams[index];
-      }
+  const handleOffer = (offer) => {
+    const peerConnection = new RTCPeerConnection(configuration);
+    peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+
+    peerConnection.createAnswer().then((answer) => {
+      peerConnection.setLocalDescription(answer);
+      sendSignalingMessage({ type: "answer", answer, roomId: meetingId });
     });
-  }, [remoteStreams]);
 
-  const toggleAudio = () => {
-    setIsMuted(!isMuted);
+    peerConnection.ontrack = (event) => {
+      setRemoteStreams((prevStreams) => [...prevStreams, event.streams[0]]);
+    };
+
+    peerConnections.current[meetingId] = peerConnection;
   };
 
-  const toggleVideo = () => {
-    setIsVideoOff(!isVideoOff);
+  const handleAnswer = (answer) => {
+    const peerConnection = peerConnections.current[meetingId];
+    peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+  };
+
+  const handleCandidate = (candidate) => {
+    const peerConnection = peerConnections.current[meetingId];
+    peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+  };
+
+  const toggleAudio = () => setIsMuted((prev) => !prev);
+  const toggleVideo = () => setIsVideoOff((prev) => !prev);
+
+  // End Meeting Logic
+  const endMeeting = async () => {
+    if (isHost) {
+      try {
+        // Update the meeting status to "ended" in Firestore
+        const meetingRef = doc(db, "meetings", meetingId);
+        await updateDoc(meetingRef, {
+          status: "ended",
+        });
+
+        // Redirect users to the meetings page
+        router.push("/meetings");
+      } catch (error) {
+        console.error("Error ending the meeting:", error);
+      }
+    }
   };
 
   return (
-    <div className="video-call-container">
-      <div className="controls">
-        {/* Audio Toggle */}
-        <button onClick={toggleAudio} className="control-button">
-          {isMuted ? (
-            <FaMicrophoneSlash className="icon" />
-          ) : (
-            <FaMicrophone className="icon" />
-          )}
+    <div>
+      <div>
+        <button onClick={toggleAudio}>
+          {isMuted ? <FaMicrophoneSlash /> : <FaMicrophone />}
         </button>
-
-        {/* Video Toggle */}
-        <button onClick={toggleVideo} className="control-button">
-          {isVideoOff ? (
-            <FaVideoSlash className="icon" />
-          ) : (
-            <FaVideo className="icon" />
-          )}
+        <button onClick={toggleVideo}>
+          {isVideoOff ? <FaVideoSlash /> : <FaVideo />}
         </button>
-
-        {/* End Meeting Button */}
-        {isHost && meetingStatus === "active" && (
-          <button onClick={endMeeting} className="end-button">
-            End Meeting
-          </button>
+        {isHost && (
+          <button onClick={endMeeting}>End Meeting</button> // Host can end the meeting
         )}
       </div>
 
-      <div className="video-grid">
-        {/* Display local video */}
-        {localStream && (
-          <video
-            ref={localVideoRef}
-            autoPlay
-            muted
-            style={{ width: "300px", height: "auto", margin: "10px" }}
-          />
-        )}
-
-        {/* Display remote videos */}
+      <div>
+        <video ref={localVideoRef} autoPlay muted />
         {remoteStreams.map((stream, index) => (
           <video
             key={index}
-            ref={(ref) => {
-              if (ref) remoteVideoRefs.current[index] = ref;
-            }}
+            ref={(ref) => (remoteVideoRefs.current[index] = ref)}
             autoPlay
-            style={{ width: "300px", height: "auto", margin: "10px" }}
           />
         ))}
       </div>

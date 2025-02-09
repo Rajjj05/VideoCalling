@@ -1,82 +1,40 @@
 let socket = null;
-const WebSocket = require("ws");
+let isWebSocketOpen = false; // Flag to track if WebSocket is open
 
-let rooms = {}; // Store rooms and participants
+const connectWebSocket = () => {
+  socket = new WebSocket("ws://localhost:8080"); // Ensure correct URL for your WebSocket server
 
-// Start WebSocket server
-const connectWebSocket = (server) => {
-  const wss = new WebSocket.Server({ server });
+  socket.onopen = () => {
+    console.log("WebSocket connected");
+    isWebSocketOpen = true; // Set the flag to true when connection is open
+  };
 
-  wss.on("connection", (ws) => {
-    console.log("A new client connected");
+  socket.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    handleSignalingMessage(data);
+  };
 
-    // Handle incoming messages from clients
-    ws.on("message", (message) => {
-      const data = JSON.parse(message);
-      const { type, meetingId } = data;
+  socket.onclose = () => {
+    console.log("WebSocket disconnected");
+    isWebSocketOpen = false; // Reset the flag when connection is closed
+  };
 
-      if (type === "join") {
-        // Participant joins the meeting
-        if (!rooms[meetingId]) {
-          rooms[meetingId] = [];
-        }
-        rooms[meetingId].push(ws);
-        console.log(`Participant joined room: ${meetingId}`);
-
-        // Notify all participants in the room that a new participant has joined
-        broadcast(meetingId, {
-          type: "participant-joined",
-          meetingId,
-        });
-      }
-
-      if (type === "offer" || type === "answer" || type === "candidate") {
-        // Forward signaling messages to all participants in the room
-        broadcast(meetingId, data);
-      }
-
-      if (type === "leave") {
-        // Participant leaves the meeting
-        leaveRoom(meetingId, ws);
-      }
-    });
-
-    // Handle WebSocket closing (participant leaving)
-    ws.on("close", () => {
-      console.log("A client disconnected");
-      for (let meetingId in rooms) {
-        leaveRoom(meetingId, ws);
-      }
-    });
-  });
-
-  console.log("WebSocket server started");
+  socket.onerror = (error) => {
+    console.error("WebSocket error:", error);
+  };
 };
 
-// Broadcast a message to all participants in a specific room
-const broadcast = (meetingId, message) => {
-  const participants = rooms[meetingId];
-  if (participants) {
-    participants.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(message));
-      }
-    });
+const handleSignalingMessage = (data) => {
+  console.log("Received signaling message:", data);
+  // Handle incoming signaling message (e.g., offer, answer, candidate)
+};
+
+const sendSignalingMessage = (data) => {
+  if (isWebSocketOpen) {
+    socket.send(JSON.stringify(data)); // Send message only if WebSocket is open
+  } else {
+    console.error("WebSocket is not open.");
   }
 };
 
-// Remove a participant from a room
-const leaveRoom = (meetingId, ws) => {
-  const participants = rooms[meetingId];
-  if (participants) {
-    const index = participants.indexOf(ws);
-    if (index !== -1) {
-      participants.splice(index, 1);
-      console.log("Participant left room:", meetingId);
-      // Notify other participants
-      broadcast(meetingId, { type: "participant-left", meetingId });
-    }
-  }
-};
-
-module.exports = { connectWebSocket };
+export { connectWebSocket, sendSignalingMessage };
