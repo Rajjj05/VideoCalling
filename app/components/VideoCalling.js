@@ -13,8 +13,8 @@ import {
 import MeetingNotes from "./MeetingNotes";
 import MeetingControls from "./MeetingControl";
 import ScreenShareButton from "./ScreenShareButton";
-import { Button } from "@/components/ui/button"; // ✅ Importing ShadCN Button
-import { ClipboardCopy } from "lucide-react"; // ✅ ShadCN Icon for Copy Button
+import { Button } from "@/components/ui/button";
+import { ClipboardCopy } from "lucide-react";
 
 const configuration = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -27,7 +27,7 @@ export default function VideoCalling({
   onMeetingEnd,
 }) {
   const localVideoRef = useRef(null);
-  const [remoteStreams, setRemoteStreams] = useState([]); // Store multiple participant streams
+  const [remoteStreams, setRemoteStreams] = useState({});
   const [peerConnections, setPeerConnections] = useState({});
   const [error, setError] = useState(null);
   const [isHost, setIsHost] = useState(false);
@@ -35,7 +35,7 @@ export default function VideoCalling({
   const [localStream, setLocalStream] = useState(null);
   const [isVideoOn, setIsVideoOn] = useState(true);
   const [isAudioOn, setIsAudioOn] = useState(true);
-  const [copied, setCopied] = useState(false); // ✅ State to show "Copied!"
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let unsubscribe = null;
@@ -57,15 +57,11 @@ export default function VideoCalling({
 
         const meetingDoc = querySnapshot.docs[0];
         const meetingData = meetingDoc.data();
-        const hostFlag = meetingData.hostId === userId;
-        setIsHost(hostFlag);
+        setIsHost(meetingData.hostId === userId);
         const roomRef = meetingDoc.ref;
 
         unsubscribe = onSnapshot(roomRef, (snapshot) => {
-          const data = snapshot.data();
-          if (data?.status === "ended") {
-            setMeetingEnded(true);
-          }
+          if (snapshot.data()?.status === "ended") setMeetingEnded(true);
         });
 
         if (meetingData.status === "ended") {
@@ -83,10 +79,11 @@ export default function VideoCalling({
           localVideoRef.current.srcObject = stream;
         }
 
-        // Handle new participants
+        // Register user as participant
         const participantsRef = collection(roomRef, "participants");
         await addDoc(participantsRef, { userId, userName });
 
+        // Listen for new participants
         onSnapshot(participantsRef, async (snapshot) => {
           const participants = snapshot.docs.map((doc) => doc.data());
           const newPeerConnections = { ...peerConnections };
@@ -100,7 +97,10 @@ export default function VideoCalling({
               stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
               pc.ontrack = (event) => {
-                setRemoteStreams((prev) => [...prev, event.streams[0]]);
+                setRemoteStreams((prev) => ({
+                  ...prev,
+                  [participant.userId]: event.streams[0],
+                }));
               };
 
               pc.onicecandidate = async (event) => {
@@ -114,6 +114,41 @@ export default function VideoCalling({
               };
 
               newPeerConnections[participant.userId] = pc;
+
+              // Offer & Answer exchange
+              const offerRef = collection(
+                roomRef,
+                `offers_${userId}_${participant.userId}`
+              );
+              const answerRef = collection(
+                roomRef,
+                `answers_${participant.userId}_${userId}`
+              );
+
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              await addDoc(offerRef, offer);
+
+              onSnapshot(offerRef, async (snapshot) => {
+                snapshot.docChanges().forEach(async (change) => {
+                  if (change.type === "added") {
+                    const offer = new RTCSessionDescription(change.doc.data());
+                    await pc.setRemoteDescription(offer);
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    await addDoc(answerRef, answer);
+                  }
+                });
+              });
+
+              onSnapshot(answerRef, (snapshot) => {
+                snapshot.docChanges().forEach(async (change) => {
+                  if (change.type === "added") {
+                    const answer = new RTCSessionDescription(change.doc.data());
+                    await pc.setRemoteDescription(answer);
+                  }
+                });
+              });
             }
           }
 
@@ -129,39 +164,24 @@ export default function VideoCalling({
 
     return () => {
       if (unsubscribe) unsubscribe();
-      for (const pc of Object.values(peerConnections)) {
-        pc.close();
-      }
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-      }
+      Object.values(peerConnections).forEach((pc) => pc.close());
+      if (stream) stream.getTracks().forEach((track) => track.stop());
     };
   }, [meetingId, userId]);
 
   const handleLeaveMeeting = () => {
-    if (localStream) {
-      localStream.getTracks().forEach((track) => track.stop());
-    }
-    for (const pc of Object.values(peerConnections)) {
-      pc.close();
-    }
+    localStream?.getTracks().forEach((track) => track.stop());
+    Object.values(peerConnections).forEach((pc) => pc.close());
     setLocalStream(null);
     setError("You have left the meeting.");
   };
 
   const handleEndMeeting = async () => {
-    try {
-      const meetingRef = doc(db, "meetings", meetingId);
-      await updateDoc(meetingRef, { status: "ended" });
-      setMeetingEnded(true);
-      onMeetingEnd();
-    } catch (err) {
-      console.error("Error ending meeting:", err);
-      setError("An error occurred while ending the meeting.");
-    }
+    await updateDoc(doc(db, "meetings", meetingId), { status: "ended" });
+    setMeetingEnded(true);
+    onMeetingEnd();
   };
 
-  // ✅ Toggle Video
   const toggleVideo = () => {
     if (localStream) {
       const newState = !isVideoOn;
@@ -170,7 +190,6 @@ export default function VideoCalling({
     }
   };
 
-  // ✅ Toggle Audio
   const toggleAudio = () => {
     if (localStream) {
       const newState = !isAudioOn;
@@ -179,11 +198,10 @@ export default function VideoCalling({
     }
   };
 
-  // ✅ Copy Meeting ID
   const copyMeetingId = () => {
     navigator.clipboard.writeText(meetingId);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000); // Reset "Copied!" after 2 sec
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -194,12 +212,11 @@ export default function VideoCalling({
         </div>
       )}
 
-      {/* ✅ Meeting ID with Copy Button */}
       <div className="flex items-center justify-between p-4 bg-gray-200">
         <p className="text-lg font-bold">Meeting ID: {meetingId}</p>
         <Button
           onClick={copyMeetingId}
-          className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded"
+          className="flex items-center gap-2 bg-blue-600 text-white"
         >
           <ClipboardCopy size={18} />
           {copied ? "Copied!" : "Copy"}
@@ -214,7 +231,7 @@ export default function VideoCalling({
           muted
           className="w-1/3 bg-black rounded"
         />
-        {remoteStreams.map((stream, index) => (
+        {Object.values(remoteStreams).map((stream, index) => (
           <video
             key={index}
             autoPlay
@@ -223,16 +240,6 @@ export default function VideoCalling({
             ref={(el) => el && (el.srcObject = stream)}
           />
         ))}
-      </div>
-
-      {/* ✅ Audio/Video Toggle Buttons */}
-      <div className="p-4 flex justify-center gap-4">
-        <Button onClick={toggleAudio} className="bg-green-600 text-white">
-          {isAudioOn ? "Mute Audio" : "Unmute Audio"}
-        </Button>
-        <Button onClick={toggleVideo} className="bg-green-600 text-white">
-          {isVideoOn ? "Turn Off Video" : "Turn On Video"}
-        </Button>
       </div>
 
       <ScreenShareButton
