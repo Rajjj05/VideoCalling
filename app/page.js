@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Button } from "../components/ui/button";
-import { ComponentShowcase } from "./components/ComponentShowcase";
+
 export const metadata = {
   title: "VideoConf App",
   description: "Modern video conferencing web application",

@@ -1,118 +1,70 @@
-// pages/meeting/[id]/page.js
-"use client";
+"use client"; // Ensure this component runs on the client side
 
-import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useParams } from "next/navigation"; // Correct for App Router
 import { useAuth } from "../../contexts/AuthContext";
-import VideoCalling from "../../components/VideoCalling";
-import { Loader2 } from "lucide-react";
-import { collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "../../lib/firebase";
+import { collection, query, where, getDocs } from "firebase/firestore";
+import VideoCall from "../../components/VideoCall"; // Import the VideoCall component
 
 export default function MeetingPage() {
-  const { id } = useParams();
+  const { id: meetingId } = useParams(); // Access the meetingId from the URL using useParams
   const { user } = useAuth();
-  const router = useRouter();
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [meeting, setMeeting] = useState(null);
 
   useEffect(() => {
-    let mounted = true;
+    if (!meetingId) return; // Only fetch if meetingId is available
 
-    const checkMeetingAndAuth = async () => {
+    const fetchMeeting = async () => {
       try {
-        if (!user) {
-          if (mounted) setIsLoading(false);
-          return;
-        }
+        console.log("Fetching meeting with meetingId:", meetingId); // Log for debugging
 
-        // Verify meeting exists and is active
         const meetingsRef = collection(db, "meetings");
-        const meetingQuery = query(meetingsRef, where("meetingId", "==", id));
-        const querySnapshot = await getDocs(meetingQuery);
+        const q = query(meetingsRef, where("meetingId", "==", meetingId));
+        const querySnapshot = await getDocs(q);
 
         if (!querySnapshot.empty) {
           const meetingData = querySnapshot.docs[0].data();
+          console.log("Fetched meeting data:", meetingData); // Log fetched data
+          setMeeting(meetingData);
           if (meetingData.status === "ended") {
-            throw new Error("This meeting has ended");
+            setError("This meeting has ended.");
+          } else {
+            setIsLoading(false);
           }
         } else {
-          throw new Error("Meeting not found");
-        }
-
-        if (mounted) {
-          setIsLoading(false);
-          setError(null);
+          setError("Meeting not found.");
         }
       } catch (err) {
-        console.error("Error checking meeting:", err);
-        if (mounted) {
-          setError(err.message);
-          setIsLoading(false);
-        }
+        console.error("Error fetching meeting data:", err);
+        setError("Error fetching meeting data.");
       }
     };
 
-    checkMeetingAndAuth();
-
-    return () => {
-      mounted = false;
-    };
-  }, [user, id]);
-
-  const handleMeetingEnd = () => {
-    // Redirect to the meetings list after ending the meeting
-    router.push("/meetings");
-  };
+    fetchMeeting(); // Fetch meeting data when meetingId is available
+  }, [meetingId]);
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <p className="text-lg mb-4">Please sign in to join the meeting.</p>
-          <button
-            onClick={() => router.push("/login")}
-            className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-          >
-            Sign In
-          </button>
-        </div>
-      </div>
-    );
+    return <div>Loading...</div>;
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <p className="text-lg text-red-600 mb-4">{error}</p>
-          <button
-            onClick={() => router.push("/meetings")}
-            className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-          >
-            Back to Meetings
-          </button>
-        </div>
+      <div>
+        <p>{error}</p>
+        <button onClick={() => router.push("/meetings")}>
+          Back to Meetings
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="container mx-auto p-4 h-screen">
-      <VideoCalling
-        meetingId={id}
-        userId={user.uid}
-        userName={user.displayName || "Anonymous"}
-        onMeetingEnd={handleMeetingEnd} // Pass the handler here
-      />
+    <div>
+      <h2>Meeting: {meeting.roomName}</h2>
+      <VideoCall meetingId={meetingId} isHost={meeting.hostId === user.uid} />
     </div>
   );
 }

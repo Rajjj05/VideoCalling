@@ -11,7 +11,6 @@ import {
   collection,
   addDoc,
   updateDoc,
-  doc,
   query,
   where,
   getDocs,
@@ -27,22 +26,21 @@ export default function Meetings() {
 
   const createMeeting = async () => {
     try {
-      // Create the meeting document without specifying meetingId
+      const roomName = "Meeting_" + Date.now(); // Or generate a unique room name
+
       const meetingRef = await addDoc(collection(db, "meetings"), {
         hostId: user.uid,
         hostName: user.displayName,
+        roomName: roomName,
         createdAt: new Date().toISOString(),
         status: "active",
       });
 
-      // Now update the document to include its auto-generated ID
       await updateDoc(meetingRef, { meetingId: meetingRef.id });
 
-      // Set the active meeting context to the document ID
       setActiveMeetingContext(meetingRef.id);
 
-      // Navigate to the meeting page using the meeting's ID
-      router.push(`/meeting/${meetingRef.id}`);
+      router.push(`/meeting/${meetingRef.id}`); // Direct to the newly created meeting
     } catch (error) {
       console.error("Error creating meeting:", error);
       setError("Failed to create meeting. Please try again.");
@@ -80,7 +78,7 @@ export default function Meetings() {
         return;
       }
 
-      router.push(`/meeting/${meetingId}`);
+      router.push(`/meeting/${meetingId}`); // Navigate to the meeting page
     } catch (error) {
       console.error("Error joining meeting:", error);
       setError("Failed to join meeting. Please try again.");
